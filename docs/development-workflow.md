@@ -29,7 +29,8 @@ cannot approve their own PRs. The owner's manual merge is the final decision.
 Squash ordinary PRs. Promote `staging` to `main` through an owner-merged PR
 using a merge commit to preserve ancestry. Do not squash promotion PRs.
 After each promotion, prepare a `main` → `staging` merge PR to bring the
-promotion commit back into staging before the next release.
+promotion commit back into staging before the next release. Use a merge commit
+for this reverse synchronization too.
 Do not delete the permanent branches. Short-lived branches can be deleted
 manually after merge. Both squash and merge commits remain enabled for these
 different uses; rebase merges and auto-merge are disabled.
@@ -54,7 +55,8 @@ a complete upstream range, use a merge commit to preserve its ancestry.
 The existing Go and frontend CI remains the baseline. Repository policy also
 validates PR routing and issue references. Browser E2E expansion and server
 deployment are separate future work. Dependabot opens PRs against `staging`;
-dependency security alerts and updates are enabled on GitHub.
+dependency security alerts and updates are enabled on GitHub. CodeQL default
+setup scans the supported languages; its result is required alongside CI.
 
 The Release workflow can prepare a draft from `main` through Run workflow.
 Use the fork's own semantic versions, starting with `v0.1.0` if unused; inspect
