@@ -14,3 +14,13 @@ Machinist owns process execution, not orchestration.
 
 Each job has exactly one run. The database enforces this with a unique `runs.job_id`.
 Terminal state comes only from the process result. There is no internal stage model.
+
+## Runtime diagram
+
+[docs/diagrams/machinist-runtime-architecture.html](docs/diagrams/machinist-runtime-architecture.html)
+is an interactive runtime architecture diagram: the primary job path, the
+control-plane and worker trust boundaries, and the external dependencies.
+Open it in a browser. The source is
+[docs/diagrams/machinist-runtime.architecture.json](docs/diagrams/machinist-runtime.architecture.json),
+rendered with the [Archify](https://github.com/tt-a1i/archify) skill at
+showcase quality; regenerate the HTML from that file after changes.
