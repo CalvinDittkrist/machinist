@@ -54,8 +54,13 @@ a complete upstream range, use a merge commit to preserve its ancestry.
 
 The existing Go and frontend CI remains the baseline. Repository policy also
 validates PR routing and issue references. Browser E2E expansion and server
-deployment are separate future work. Dependabot opens PRs against `staging`;
-dependency security alerts and updates are enabled on GitHub. CodeQL default
+deployment are separate future work. Dependabot version-update PRs target `staging`.
+GitHub creates security-update PRs against the default branch (`main`) regardless
+of that setting. Retarget these to `staging`, update their branch against staging,
+and rerun CI before merging; the routing check deliberately prevents a direct
+merge into main. Agents may prepare this retargeting but must not merge. See
+[GitHub's Dependabot behavior](https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/customizing-dependabot-prs).
+Dependency security alerts and updates are enabled on GitHub. CodeQL default
 setup scans the supported languages; its result is required alongside CI.
 
 The Release workflow can prepare a draft from `main` through Run workflow.
