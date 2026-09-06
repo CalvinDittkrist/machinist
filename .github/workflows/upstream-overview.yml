@@ -1,0 +1,28 @@
+name: Upstream overview
+
+on:
+  schedule:
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-overview
+  cancel-in-progress: false
+
+jobs:
+  overview:
+    if: github.repository == 'CalvinDittkrist/machinist'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open an overview only when upstream changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/upstream-overview.py

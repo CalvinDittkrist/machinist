@@ -2,13 +2,10 @@
 
 ## Reporting
 
-Do not open a public issue for an unpatched vulnerability. Email
-[owain@owainlewis.com](mailto:owain@owainlewis.com) with the affected revision,
-impact, reproduction steps, and any suggested mitigation. Do not include real
-credentials or private repository data.
-
-You should receive an acknowledgement within seven days. The maintainer will
-coordinate remediation and disclosure after the report is understood.
+Use [private vulnerability reporting](https://github.com/CalvinDittkrist/machinist/security/advisories/new)
+for this fork. Include the affected revision, impact, reproduction steps, and
+suggested mitigation. Do not include real credentials or private repository data.
+Do not report vulnerabilities in this fork to the original maintainer.
 
 ## Supported versions
 

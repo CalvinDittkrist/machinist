@@ -1,6 +1,10 @@
 ## Problem
 
-<!-- What problem does this pull request solve? Link an issue when one exists. -->
+<!-- What problem does this pull request solve? For feat/fix PRs, include Refs #123 for an existing issue in this repository. -->
+
+## Type
+
+<!-- Use a conventional title: feat:, fix:, docs:, chore:, build:, ci:, refactor:, test:, perf:, revert:, or deps:. -->
 
 ## Changes
 

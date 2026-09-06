@@ -1,3 +1,5 @@
+> Personal fork maintained by CalvinDittkrist, based on [owainlewis/machinist](https://github.com/owainlewis/machinist). See the [development workflow](docs/development-workflow.md). The website links below describe the original project.
+
 <p align="center">
   <img src=".github/assets/machinist-lockup.svg" width="520" alt="Machinist">
 </p>
@@ -39,7 +41,7 @@ Please note: this is early access software and subject to change.
 Build and initialize Machinist:
 
 ```sh
-git clone https://github.com/owainlewis/machinist.git
+git clone https://github.com/CalvinDittkrist/machinist.git
 cd machinist
 mkdir -p ./bin && go build -o ./bin/machinist ./cmd/machinist
 ./bin/machinist init
