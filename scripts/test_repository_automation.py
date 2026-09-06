@@ -62,6 +62,18 @@ class AutomationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.validate(self.pr(base="main"), "owner/repo", lambda n: {})
 
+    def test_dependabot_titles_are_exempt_but_routing_is_not(self):
+        pr = self.pr(title="Bump example from 1.0.0 to 1.0.1", body="")
+        pr["user"] = {"login": "dependabot[bot]", "type": "Bot"}
+        policy.validate(pr, "owner/repo", lambda n: self.fail("Unexpected issue lookup"))
+        pr["base"]["ref"] = "main"
+        with self.assertRaises(ValueError):
+            policy.validate(pr, "owner/repo", lambda n: {})
+        pr["base"]["ref"] = "staging"
+        pr["user"] = {"login": "contributor", "type": "User"}
+        with self.assertRaises(ValueError):
+            policy.validate(pr, "owner/repo", lambda n: {})
+
 
 if __name__ == "__main__":
     unittest.main()

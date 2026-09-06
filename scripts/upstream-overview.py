@@ -29,7 +29,7 @@ def overview_body(base, head, commits):
         title = re.sub(r"[^\w .,():/+-]", "", commit["commit"]["message"].splitlines()[0])[:200]
         lines.append(f"- [ ] [{sha[:7]}](https://github.com/{UPSTREAM}/commit/{sha}) — {title}")
     if len(commits) >= 100:
-        lines.append("\nThe list is capped at 100 commits; use the complete comparison above.")
+        lines += ["", "The list is capped at 100 commits; use the complete comparison above."]
     lines += ["", "## Selection", "", "Record selected commits and follow-up issue/PR links here."]
     return "\n".join(lines)
 

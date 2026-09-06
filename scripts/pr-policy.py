@@ -15,6 +15,9 @@ def validate(pr, repo, issue_lookup):
         return
     if base != "staging":
         raise ValueError("Open working PRs against staging.")
+    author = pr.get("user", {})
+    if author.get("login") == "dependabot[bot]" and author.get("type") == "Bot":
+        return
     match = re.match(r"^(feat|fix|docs|chore|build|ci|refactor|test|perf|revert|deps)(\([^\n)]+\))?!?: .+", pr["title"])
     if not match:
         raise ValueError("Use a conventional PR title, for example feat: add a feature.")
