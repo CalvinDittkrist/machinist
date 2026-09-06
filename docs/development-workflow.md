@@ -31,8 +31,8 @@ using a merge commit to preserve ancestry. Do not squash promotion PRs.
 After each promotion, prepare a `main` → `staging` merge PR to bring the
 promotion commit back into staging before the next release. Use a merge commit
 for this reverse synchronization too.
-Do not delete the permanent branches. Short-lived branches can be deleted
-manually after merge. Both squash and merge commits remain enabled for these
+Do not delete the protected permanent branches (`main` and `staging`). GitHub
+automatically deletes merged working branches. Both squash and merge commits remain enabled for these
 different uses; rebase merges and auto-merge are disabled.
 
 ## Selected upstream improvements
