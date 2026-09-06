@@ -1,6 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: gomod
+    target-branch: staging
     directory: /
     schedule:
       interval: weekly
@@ -12,6 +13,7 @@ updates:
           - minor
           - patch
   - package-ecosystem: npm
+    target-branch: staging
     directory: /internal/controlplane/web
     schedule:
       interval: weekly
@@ -29,6 +31,7 @@ updates:
           - minor
           - patch
   - package-ecosystem: github-actions
+    target-branch: staging
     directory: /
     schedule:
       interval: monthly

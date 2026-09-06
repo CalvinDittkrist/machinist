@@ -2,14 +2,32 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches:
       - main
+      - staging
 
 permissions:
   contents: read
 
 jobs:
+  repository:
+    name: Repository checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test repository automation
+        run: python3 -m unittest discover -s scripts -p 'test_repository_automation.py' -v
+      - name: Validate PR policy
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/pr-policy.py
+
   linux:
     name: Linux checks
     runs-on: ubuntu-24.04
@@ -87,13 +105,16 @@ jobs:
     needs:
       - linux
       - macos
+      - repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every platform check
         env:
+          REPOSITORY_RESULT: ${{ needs.repository.result }}
           LINUX_RESULT: ${{ needs.linux.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
         run: |
+          test "$REPOSITORY_RESULT" = success
           test "$LINUX_RESULT" = success
           test "$MACOS_RESULT" = success

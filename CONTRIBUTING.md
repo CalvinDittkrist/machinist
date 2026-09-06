@@ -1,5 +1,9 @@
 # Contributing
 
+Start with [our development workflow](docs/development-workflow.md). Open PRs
+against `staging`; bugs and features require an issue. Only the owner merges.
+External contributors are welcome through forks.
+
 Machinist uses Go for the CLI, control plane, and workers, plus React and Vite
 for the embedded browser interface.
 
