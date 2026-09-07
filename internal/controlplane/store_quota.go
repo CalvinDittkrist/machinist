@@ -101,6 +101,7 @@ type querier interface {
 // queuedRun is one admission candidate.
 type queuedRun struct {
 	id, jobID, command, commandHash, executor, model, repository, jobState string
+	resolvedModel                                                          string
 	nextCheckAt, observedAt, accountKey                                    string
 }
 
@@ -140,6 +141,17 @@ func (s *Store) evaluateCandidate(ctx context.Context, tx querier, policy quota.
 		newer := hasObservation && (evaluated == nil || observation.ObservedAt.After(*evaluated) || observation.AccountKey != candidate.accountKey)
 		if nextCheck != nil && nextCheck.After(now) && !newer {
 			return admission{}, false, nil
+		}
+	}
+	if policy.Enabled && hasObservation && observation.Usable() {
+		var completedSince int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE provider=? AND (account_key=? OR account_key='' OR ?='') AND completed_at IS NOT NULL AND julianday(completed_at)>julianday(?)`,
+			provider, observation.AccountKey, observation.AccountKey, observation.ObservedAt.UTC().Format(time.RFC3339Nano)).Scan(&completedSince); err != nil {
+			return admission{}, false, fmt.Errorf("check quota evidence against completed work: %w", err)
+		}
+		if completedSince > 0 {
+			decision := quota.Decision{Code: quota.CodeStale, Reason: "Work on this provider account completed after the quota observation; refresh quota on the worker before allocating more headroom.", ObservedAt: observation.ObservedAt, AccountKey: observation.AccountKey, NextCheckAt: now.Add(policy.CheckInterval)}
+			return admission{}, false, recordQuotaWait(ctx, tx, candidate.id, decision, now)
 		}
 	}
 	reservations, err := activeReservations(ctx, tx, provider)
@@ -182,53 +194,27 @@ func activeReservations(ctx context.Context, tx querier, provider string) ([]quo
 	return reservations, rows.Err()
 }
 
-// requirementFor estimates the candidate's consumption from comparable runs.
-// Each window uses the narrow comparison first (same repository, workflow
-// version, provider, and model) and falls back to the same workflow and model
-// on any repository. Windows without reliable history are omitted so the
-// policy's minimum reserve applies.
+// requirementFor only trusts history from the same project, workflow version,
+// provider and requested/resolved model. Insufficient matching history uses
+// the policy's minimum reserve rather than widening to unrelated executions.
 func (s *Store) requirementFor(ctx context.Context, tx querier, policy quota.Policy, provider string, candidate queuedRun) (quota.Requirement, error) {
-	narrow, err := quotaSamplesFrom(ctx, tx, quotaComparison{provider: provider, repository: candidate.repository, command: candidate.command, commandHash: candidate.commandHash, model: candidate.model})
+	samples, err := quotaSamplesFrom(ctx, tx, quotaComparison{provider: provider, repository: candidate.repository, command: candidate.command, commandHash: candidate.commandHash, model: candidate.model, resolvedModel: candidate.resolvedModel})
 	if err != nil {
 		return quota.Requirement{}, err
 	}
-	wide, err := quotaSamplesFrom(ctx, tx, quotaComparison{provider: provider, command: candidate.command, model: candidate.model})
-	if err != nil {
-		return quota.Requirement{}, err
-	}
-	requirement := policy.Estimate(narrow)
-	covered := make(map[string]bool, len(requirement.Windows))
-	for _, window := range requirement.Windows {
-		covered[window.WindowID] = true
-	}
-	for _, window := range policy.Estimate(wide).Windows {
-		if !covered[window.WindowID] {
-			requirement.Windows = append(requirement.Windows, window)
-		}
-	}
-	return requirement, nil
+	return policy.Estimate(samples), nil
 }
 
-// quotaComparison selects comparable finished runs. Empty repository or hash
-// widens the comparison.
+// quotaComparison identifies comparable finished runs without broad fallbacks.
 type quotaComparison struct {
-	provider, repository, command, commandHash, model string
+	provider, repository, command, commandHash, model, resolvedModel string
 }
 
 // quotaSamplesFrom lists consumption samples for comparable finished runs,
 // newest first.
 func quotaSamplesFrom(ctx context.Context, tx querier, comparison quotaComparison) ([]quota.Sample, error) {
-	provider, repository, command, commandHash, model := comparison.provider, comparison.repository, comparison.command, comparison.commandHash, comparison.model
-	query := `SELECT w.window_id,w.consumed_percent,w.quality FROM run_quota_windows w JOIN runs r ON r.id=w.run_id WHERE r.provider=? AND r.command=? AND r.model=? AND r.completed_at IS NOT NULL AND w.consumed_percent IS NOT NULL`
-	args := []any{provider, command, model}
-	if repository != "" {
-		query += ` AND r.repository=?`
-		args = append(args, repository)
-	}
-	if commandHash != "" {
-		query += ` AND r.command_hash=?`
-		args = append(args, commandHash)
-	}
+	query := `SELECT w.window_id,w.consumed_percent,w.quality FROM run_quota_windows w JOIN runs r ON r.id=w.run_id WHERE r.provider=? AND r.command=? AND r.model=? AND r.repository=? AND r.command_hash=? AND r.resolved_model=? AND r.completed_at IS NOT NULL AND w.consumed_percent IS NOT NULL`
+	args := []any{comparison.provider, comparison.command, comparison.model, comparison.repository, comparison.commandHash, comparison.resolvedModel}
 	query += ` ORDER BY r.completed_at DESC,w.window_id LIMIT ?`
 	args = append(args, maxQuotaSamples)
 	rows, err := tx.QueryContext(ctx, query, args...)

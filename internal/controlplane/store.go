@@ -832,6 +832,7 @@ func (s *Store) pollWithPolicy(ctx context.Context, request protocol.PollRequest
 			break
 		}
 		resolvedModel := request.ResolvedModels[candidate.executor][candidate.model]
+		candidate.resolvedModel = resolvedModel
 		outcome, admit, err := s.evaluateCandidate(ctx, tx, policy, nowTime, candidate, provider, request.Quota, []string{candidate.model, resolvedModel})
 		if err != nil {
 			return nil, err
@@ -940,11 +941,19 @@ func (s *Store) Complete(ctx context.Context, runID string, completion protocol.
 			after = &observation
 		}
 	}
-	overlapping, err := overlappingRuns(ctx, tx, runID, provider, accountKey, startedAt, now)
+	before := decodeObservation(beforeJSON)
+	measurementStart, measurementEnd := startedAt, now
+	if before != nil {
+		measurementStart = before.ObservedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if after != nil {
+		measurementEnd = after.ObservedAt.UTC().Format(time.RFC3339Nano)
+	}
+	overlapping, err := overlappingRuns(ctx, tx, runID, provider, accountKey, measurementStart, measurementEnd)
 	if err != nil {
 		return err
 	}
-	if err := recordQuotaMeasurement(ctx, tx, runID, after, quota.Measure(decodeObservation(beforeJSON), after, overlapping)); err != nil {
+	if err := recordQuotaMeasurement(ctx, tx, runID, after, quota.Measure(before, after, overlapping)); err != nil {
 		return err
 	}
 	if completion.State == "succeeded" {

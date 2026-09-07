@@ -352,9 +352,12 @@ func TestCompleteFlagsOverlappingResetAndMissingMeasurements(t *testing.T) {
 	if missing.QuotaUsage == nil || missing.QuotaUsage.Windows[0].Quality != quota.QualityMissingAfter {
 		t.Fatalf("missing usage = %#v", missing.QuotaUsage)
 	}
-	samples, err := quotaSamplesFrom(t.Context(), store.db, quotaComparison{provider: "claude", repository: "machinist", command: "plan", commandHash: "plan-hash", model: "opus"})
+	samples, err := quotaSamplesFrom(t.Context(), store.db, quotaComparison{provider: "claude", repository: "machinist", command: "plan", commandHash: "plan-hash", model: "opus", resolvedModel: "claude-opus-5"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(samples) == 0 {
+		t.Fatal("expected overlapping quota samples")
 	}
 	for _, sample := range samples {
 		if sample.Quality == quota.QualityMeasured {
