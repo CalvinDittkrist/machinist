@@ -153,13 +153,20 @@ func (p Policy) Evaluate(now time.Time, candidate Candidate, observations []Obse
 	}
 	switch observation.Status {
 	case StatusAuthRequired:
-		return wait(CodeAuthRequired, fmt.Sprintf("Sign-in for %s is required on the worker: %s.", candidate.Provider, orUnknown(observation.Error)))
+		return wait(CodeAuthRequired, fmt.Sprintf("Sign-in for %s is required on the worker: %s.", candidate.Provider, orNoDetails(observation.Error)))
 	case StatusUnavailable:
-		return wait(CodeUnavailable, fmt.Sprintf("Quota for %s is unavailable on the worker: %s.", candidate.Provider, orUnknown(observation.Error)))
+		return wait(CodeUnavailable, fmt.Sprintf("Quota for %s is unavailable on the worker: %s.", candidate.Provider, orNoDetails(observation.Error)))
 	case StatusError:
-		return wait(CodeObservationError, fmt.Sprintf("Reading %s quota failed: %s.", candidate.Provider, orUnknown(observation.Error)))
+		return wait(CodeObservationError, fmt.Sprintf("Reading %s quota failed: %s.", candidate.Provider, orNoDetails(observation.Error)))
+	case StatusFresh:
 	case StatusStale:
 		return wait(CodeStale, fmt.Sprintf("Quota evidence for %s is stale on the worker; waiting for a fresh observation.", candidate.Provider))
+	}
+	if observation.Partial {
+		return wait(CodeUnavailable, fmt.Sprintf("Quota evidence for %s is incomplete; refresh quota-axi until all binding windows are available.", candidate.Provider))
+	}
+	if observation.Status != StatusFresh {
+		return wait(CodeObservationError, fmt.Sprintf("Quota evidence for %s has an unsupported status; refresh the worker adapter.", candidate.Provider))
 	}
 	if age := now.Sub(observation.ObservedAt); age > p.MaxObservationAge {
 		return wait(CodeStale, fmt.Sprintf("Quota evidence for %s was observed %s ago, older than the %s limit; waiting for a fresh observation.", candidate.Provider, formatDuration(age), formatDuration(p.MaxObservationAge)))
@@ -255,13 +262,6 @@ func assessmentName(assessment Assessment) string {
 		return assessment.Label
 	}
 	return assessment.WindowID
-}
-
-func orUnknown(message string) string {
-	if strings.TrimSpace(message) == "" {
-		return "no details reported"
-	}
-	return message
 }
 
 func formatDuration(duration time.Duration) string {

@@ -110,14 +110,18 @@ a worker supplies newer evidence or evidence for a different account.
 The requirement for a window is the 90th percentile of consumption over the
 most recent comparable runs (up to 20), plus the safety reserve. Runs are
 comparable when they share repository, command, command hash, provider, and
-model; if that yields too little history, runs sharing command, provider, and
-model on any repository are used. Failed, timed out, and cancelled runs count
+requested and resolved model. History is never widened across projects,
+workflow versions, or model mappings when comparable samples are insufficient. Failed, timed out, and cancelled runs count
 because they consume quota. Windows without at least `minimum_samples`
 reliable samples use `minimum_reserve_percent` instead.
 
 Availability is the window's remaining percentage minus reservations held by
 other running runs on the same provider account. Reservations are conservative:
-they are not reduced as a run consumes quota.
+they are not reduced as a run consumes quota. After a run completes, observations
+older than that completion cannot allocate more headroom on the same account,
+even if the worker cache has not expired or the completion has no quota evidence.
+The worker must refresh its observation. Incomplete reports also wait until all
+quota windows are readable.
 
 ## Measurement quality
 
@@ -131,7 +135,9 @@ Each window is compared before and after the run and stored with one quality:
 | `missing_before` / `missing_after` | One observation was unusable or absent | no |
 
 A difference is never presented as proven task-attributable consumption.
-Unrelated manual use of the same account is unobservable and may be included.
+Overlap detection uses the timestamps of both observations, including activity
+between a cached pre-run observation and the run start. Unrelated manual use
+of the same account is unobservable and may be included.
 
 ## Dashboard
 

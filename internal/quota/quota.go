@@ -92,7 +92,7 @@ type Observation struct {
 
 // Usable reports whether the observation can support an admission decision.
 func (o Observation) Usable() bool {
-	return o.Status == StatusFresh && len(o.Windows) > 0
+	return o.Status == StatusFresh && !o.Partial && len(o.Windows) > 0
 }
 
 // Window returns the window with the given ID.
