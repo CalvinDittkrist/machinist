@@ -1,6 +1,10 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/owainlewis/machinist/internal/quota"
+)
 
 type PollRequest struct {
 	InstanceID   string              `json:"instance_id"`
@@ -8,6 +12,13 @@ type PollRequest struct {
 	Executors    []string            `json:"executors"`
 	Repositories []string            `json:"repositories"`
 	Models       map[string][]string `json:"models,omitempty"`
+	// ResolvedModels maps executor name to model alias to the provider model
+	// name, so quota admission can match model-specific windows.
+	ResolvedModels map[string]map[string]string `json:"resolved_models,omitempty"`
+	// Providers maps executor name to the quota provider it consumes.
+	Providers map[string]string `json:"providers,omitempty"`
+	// Quota carries sanitized quota observations taken on the worker.
+	Quota []quota.Observation `json:"quota,omitempty"`
 }
 
 type PollResponse struct {
@@ -40,4 +51,6 @@ type Completion struct {
 	Error      string          `json:"error,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	Events     string          `json:"events,omitempty"`
+	// Quota carries observations taken on the worker after the run finished.
+	Quota []quota.Observation `json:"quota,omitempty"`
 }

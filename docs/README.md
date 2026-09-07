@@ -2,6 +2,7 @@
 
 - [Configuration and migration](configuration.md)
 - [Workflow roadmap: scaling AI engineering](workflow-roadmap.md)
+- [Quota-aware admission and usage history](quota.md)
 - [Architecture](../ARCHITECTURE.md)
 - [VM deployment](vm-deployment.md)
 - [Development](development.md)

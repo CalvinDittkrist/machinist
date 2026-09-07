@@ -689,7 +689,7 @@ func TestServerCancellationAlwaysStopsHTTPServer(t *testing.T) {
 			t.Fatal(err)
 		}
 		store := openTestStore(t, filepath.Join(directory, "machinist.db"))
-		server, err := NewServer(store, definitionPath, "secret", 0)
+		server, err := NewServer(store, Options{DefinitionPath: definitionPath, WorkerToken: "secret"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -804,7 +804,7 @@ func newTestHTTPServerWithLimit(t *testing.T, maxConcurrentJobs int) (*Server, *
 		t.Fatal(err)
 	}
 	store := openTestStore(t, filepath.Join(directory, "machinist.db"))
-	server, err := NewServer(store, definitionPath, "secret", maxConcurrentJobs)
+	server, err := NewServer(store, Options{DefinitionPath: definitionPath, WorkerToken: "secret", MaxConcurrentJobs: maxConcurrentJobs})
 	if err != nil {
 		t.Fatal(err)
 	}
