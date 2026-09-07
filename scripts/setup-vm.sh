@@ -38,9 +38,27 @@ if [[ ${ID:-} != ubuntu && ${ID:-} != debian ]]; then
   exit 1
 fi
 
+# MACHINIST_ROLE=control-plane skips the worker tooling (coding agents and the
+# quota-axi adapter) and leaves the worker service disabled. The default
+# installs both roles on one host.
+machinist_role=${MACHINIST_ROLE:-worker}
+if [[ $machinist_role != worker && $machinist_role != control-plane ]]; then
+  echo "MACHINIST_ROLE must be worker or control-plane" >&2
+  exit 2
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl git gh jq openssh-client tar
+
+# quota-axi reads provider quota for the managed worker. It is a Node.js CLI,
+# pinned to the release Machinist is tested against.
+quota_axi_version=${QUOTA_AXI_VERSION:-0.1.39}
+node_major=${NODE_MAJOR:-22}
+if [[ $machinist_role == worker ]] && { ! command -v node >/dev/null 2>&1 || [[ $(node --version | sed 's/^v//' | cut -d. -f1) -lt $node_major ]]; }; then
+  curl -fsSL "https://deb.nodesource.com/setup_${node_major}.x" | bash -
+  apt-get install -y nodejs
+fi
 
 runtime_user=machinist
 if ! id "$runtime_user" >/dev/null 2>&1; then
@@ -52,25 +70,46 @@ if [[ -z $runtime_home || ! -d $runtime_home ]]; then
   exit 1
 fi
 
-# Codex and Claude Code use per-user credentials, so install their standalone
-# distributions as the account that will run Machinist.
-runuser -u "$runtime_user" -- env HOME="$runtime_home" \
-  bash -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
-runuser -u "$runtime_user" -- env HOME="$runtime_home" \
-  bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
 curl -fsSL "https://raw.githubusercontent.com/owainlewis/machinist/$machinist_version/install.sh" | \
   env MACHINIST_VERSION="$machinist_version" sh
 
-# Standalone agent installers use ~/.local/bin. Login shells commonly add that
-# directory to PATH, but services and other non-interactive processes do not.
-for agent_command in codex claude; do
-  agent_path="$runtime_home/.local/bin/$agent_command"
-  if [[ ! -x "$agent_path" ]]; then
-    echo "$agent_command installer did not create $agent_path" >&2
+if [[ $machinist_role == worker ]]; then
+  # Codex and Claude Code use per-user credentials, so install their standalone
+  # distributions as the account that will run Machinist.
+  runuser -u "$runtime_user" -- env HOME="$runtime_home" \
+    bash -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+  runuser -u "$runtime_user" -- env HOME="$runtime_home" \
+    bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+
+  # Install the pinned quota-axi release into the runtime user's ~/.local so it
+  # runs under the same account and credential store as the executors. A
+  # matching existing installation is reused.
+  installed_quota_axi=""
+  if [[ -x "$runtime_home/.local/bin/quota-axi" ]]; then
+    installed_quota_axi=$(runuser -u "$runtime_user" -- env HOME="$runtime_home" \
+      "$runtime_home/.local/bin/quota-axi" --version 2>/dev/null | tail -n 1 || true)
+  fi
+  if [[ $installed_quota_axi != "$quota_axi_version" ]]; then
+    runuser -u "$runtime_user" -- env HOME="$runtime_home" \
+      npm install --global --prefix "$runtime_home/.local" "quota-axi@$quota_axi_version"
+  fi
+
+  # Standalone agent installers use ~/.local/bin. Login shells commonly add that
+  # directory to PATH, but services and other non-interactive processes do not.
+  for agent_command in codex claude quota-axi; do
+    agent_path="$runtime_home/.local/bin/$agent_command"
+    if [[ ! -x "$agent_path" ]]; then
+      echo "$agent_command installer did not create $agent_path" >&2
+      exit 1
+    fi
+    ln -sfn "$agent_path" "/usr/local/bin/$agent_command"
+  done
+  installed_quota_axi=$(runuser -u "$runtime_user" -- env HOME="$runtime_home" quota-axi --version | tail -n 1)
+  if [[ $installed_quota_axi != "$quota_axi_version" ]]; then
+    echo "quota-axi reports version $installed_quota_axi, expected $quota_axi_version" >&2
     exit 1
   fi
-  ln -sfn "$agent_path" "/usr/local/bin/$agent_command"
-done
+fi
 
 runuser -u "$runtime_user" -- env HOME="$runtime_home" machinist init
 
@@ -97,7 +136,9 @@ install -m 0644 "$service_tmp_dir/machinist-worker.service" \
 systemctl daemon-reload
 systemctl enable machinist-control-plane.service
 systemctl restart machinist-control-plane.service
-if runuser -u "$runtime_user" -- env HOME="$runtime_home" machinist worker validate --help >/dev/null 2>&1; then
+if [[ $machinist_role == control-plane ]]; then
+  systemctl disable --now machinist-worker.service 2>/dev/null || true
+elif runuser -u "$runtime_user" -- env HOME="$runtime_home" machinist worker validate --help >/dev/null 2>&1; then
   if runuser -u "$runtime_user" -- env HOME="$runtime_home" machinist worker validate >/dev/null 2>&1; then
     systemctl enable machinist-worker.service
     systemctl restart machinist-worker.service
@@ -133,10 +174,12 @@ Next steps:
   2. Run `gh auth login`.
   3. Run `codex` once and sign in.
   4. Run `claude` once and sign in.
-  5. Clone each repository agents may use and register its absolute path in
+  5. Run `machinist worker quota` to confirm quota-axi reads each provider
+     under this account.
+  6. Clone each repository agents may use and register its absolute path in
      ~/.machinist/worker.toml.
-  6. Exit back to root and run `systemctl enable --now machinist-worker` after registering a repository.
-  7. Check `systemctl status machinist-control-plane machinist-worker`.
+  7. Exit back to root and run `systemctl enable --now machinist-worker` after registering a repository.
+  8. Check `systemctl status machinist-control-plane machinist-worker`.
 
 Keep the control plane on 127.0.0.1. Reach it from your computer with:
   ssh -N -L 7331:127.0.0.1:7331 machinist

@@ -21,6 +21,7 @@ import (
 
 	"github.com/owainlewis/machinist/internal/config"
 	"github.com/owainlewis/machinist/internal/protocol"
+	"github.com/owainlewis/machinist/internal/quota"
 )
 
 // The runner records up to 64 MiB before base64 encoding. The JSON envelope remains
@@ -44,9 +45,19 @@ type Server struct {
 	schedulerError    func(error)
 	shutdownTimeout   time.Duration
 	maxConcurrentJobs int
+	quotaPolicy       quota.Policy
 	workerToken       string
 	csrfToken         string
 	handler           http.Handler
+}
+
+// Options configures a control plane server.
+type Options struct {
+	DefinitionPath    string
+	WorkerToken       string
+	MaxConcurrentJobs int
+	// QuotaPolicy governs quota-aware admission. The zero value disables it.
+	QuotaPolicy quota.Policy
 }
 
 type statusResponse struct {
@@ -80,9 +91,17 @@ type catalogResponse struct {
 	Repositories []string `json:"repositories"`
 }
 
-func NewServer(store *Store, definitionPath, workerToken string, maxConcurrentJobs int) (*Server, error) {
+func NewServer(store *Store, options Options) (*Server, error) {
+	definitionPath, workerToken, maxConcurrentJobs := options.DefinitionPath, options.WorkerToken, options.MaxConcurrentJobs
 	if maxConcurrentJobs < 0 {
 		return nil, errors.New("max concurrent jobs cannot be negative")
+	}
+	policy := options.QuotaPolicy
+	if defaults := quota.DefaultPolicy(); policy.CheckInterval <= 0 {
+		policy.CheckInterval = defaults.CheckInterval
+	}
+	if defaults := quota.DefaultPolicy(); policy.MaxObservationAge <= 0 {
+		policy.MaxObservationAge = defaults.MaxObservationAge
 	}
 	csrfToken, err := randomID("csrf", 24)
 	if err != nil {
@@ -108,7 +127,7 @@ func NewServer(store *Store, definitionPath, workerToken string, maxConcurrentJo
 		github: NewGitHubCLI("gh", 30*time.Second), now: time.Now,
 		schedulerEvery: 30 * time.Second, shutdownTimeout: 5 * time.Second,
 		schedulerError:    func(err error) { log.Printf("scheduler: %v", err) },
-		maxConcurrentJobs: maxConcurrentJobs, workerToken: workerToken, csrfToken: csrfToken,
+		maxConcurrentJobs: maxConcurrentJobs, quotaPolicy: policy, workerToken: workerToken, csrfToken: csrfToken,
 	}
 	server.handler, err = server.routes()
 	if err != nil {
@@ -411,7 +430,7 @@ func (s *Server) poll(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, errors.New("worker instance_id and name are required"))
 		return
 	}
-	run, err := s.store.poll(request.Context(), input, s.maxConcurrentJobs)
+	run, err := s.store.pollWithPolicy(request.Context(), input, s.maxConcurrentJobs, s.quotaPolicy)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, err)
 		return

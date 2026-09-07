@@ -75,6 +75,7 @@ Scripts are intentionally opaque. Their internal stages appear in logs, but Mach
 | --- | --- |
 | [Documentation](docs/README.md) | Choose the right setup and operations guide |
 | [Configuration](docs/configuration.md) | Commands, executors, workers, models, and repositories |
+| [Quota-aware admission](docs/quota.md) | Waiting on provider quota and learning from past runs |
 | [Development](docs/development.md) | Build, test, and work on Machinist locally |
 | [VM deployment](docs/vm-deployment.md) | Run the control plane and worker as services |
 | [Workflow examples](examples/workflows/README.md) | Repository-owned multi-step orchestration |

@@ -16,6 +16,7 @@ import (
 
 	"github.com/owainlewis/machinist/internal/config"
 	"github.com/owainlewis/machinist/internal/protocol"
+	"github.com/owainlewis/machinist/internal/quota"
 	_ "modernc.org/sqlite"
 )
 
@@ -33,7 +34,7 @@ const leaseDuration = 30 * time.Second
 const maxTriggerErrorLength = 2000
 
 // reclaimExpiredLeasesSQL returns running runs whose lease lapsed to the queue.
-const reclaimExpiredLeasesSQL = `UPDATE runs SET state='queued',worker_instance=NULL,worker_name='',lease_token=NULL,lease_expires_at=NULL,started_at=NULL WHERE state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=?)`
+const reclaimExpiredLeasesSQL = `UPDATE runs SET state='queued',worker_instance=NULL,worker_name='',lease_token=NULL,lease_expires_at=NULL,started_at=NULL,provider='',account_key='',resolved_model='',quota_state='',quota_reservation=NULL,quota_before=NULL,quota_assessment=NULL,quota_observed_at=NULL WHERE state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=?)`
 
 type Store struct {
 	db  *sql.DB
@@ -68,14 +69,26 @@ type Run struct {
 	CompletedAt    time.Time `json:"completed_at,omitempty"`
 	DurationMillis *int64    `json:"duration_millis,omitempty"`
 	TokenUsage     *int64    `json:"token_usage,omitempty,string"`
+	// Provider is the quota provider the run consumes, when governed.
+	Provider      string `json:"provider,omitempty"`
+	ResolvedModel string `json:"resolved_model,omitempty"`
+	// QuotaWait is present while quota admission keeps a queued run waiting.
+	QuotaWait *QuotaWait `json:"quota_wait,omitempty"`
+	// QuotaAssessment records the binding windows evaluated at admission.
+	QuotaAssessment []quota.Assessment `json:"quota_assessment,omitempty"`
+	// QuotaReservation is the headroom claimed while the run is active.
+	QuotaReservation map[string]float64 `json:"quota_reservation,omitempty"`
+	// QuotaUsage compares provider quota before and after the run.
+	QuotaUsage *quota.Measurement `json:"quota_usage,omitempty"`
 }
 
 type Worker struct {
-	InstanceID   string    `json:"instance_id"`
-	Name         string    `json:"name"`
-	LastSeenAt   time.Time `json:"last_seen_at"`
-	Repositories []string  `json:"repositories"`
-	Connected    bool      `json:"connected"`
+	InstanceID   string        `json:"instance_id"`
+	Name         string        `json:"name"`
+	LastSeenAt   time.Time     `json:"last_seen_at"`
+	Repositories []string      `json:"repositories"`
+	Connected    bool          `json:"connected"`
+	Quota        []WorkerQuota `json:"quota"`
 }
 
 type Snapshot struct {
@@ -172,7 +185,7 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) initialize(ctx context.Context) error {
-	const schemaVersion = 2
+	const schemaVersion = 3
 	var version int
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read database schema version: %w", err)
@@ -192,6 +205,12 @@ DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS jobs; PRAGMA foreign_keys=ON;`);
 		if err := s.upgradeToVersionTwo(ctx); err != nil {
 			return fmt.Errorf("upgrade database schema to version 2: %w", err)
 		}
+		version = 2
+	}
+	if version == 2 {
+		if err := s.upgradeToVersionThree(ctx); err != nil {
+			return fmt.Errorf("upgrade database schema to version 3: %w", err)
+		}
 	}
 	const schema = `
 PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
@@ -206,9 +225,18 @@ CREATE TABLE IF NOT EXISTS runs (
  executor TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', repository TEXT NOT NULL, rendered_prompt TEXT NOT NULL,
  timeout_ms INTEGER NOT NULL, state TEXT NOT NULL, worker_instance TEXT, worker_name TEXT NOT NULL DEFAULT '',
  lease_token TEXT, lease_expires_at INTEGER, exit_code INTEGER, error TEXT, result TEXT, events TEXT,
- started_at TEXT, completed_at TEXT, duration_millis INTEGER, token_usage INTEGER);
+ started_at TEXT, completed_at TEXT, duration_millis INTEGER, token_usage INTEGER,
+ provider TEXT NOT NULL DEFAULT '', account_key TEXT NOT NULL DEFAULT '', resolved_model TEXT NOT NULL DEFAULT '',
+ quota_state TEXT NOT NULL DEFAULT '', quota_wait_code TEXT NOT NULL DEFAULT '', quota_wait_reason TEXT NOT NULL DEFAULT '',
+ quota_wait_since TEXT, quota_next_check_at TEXT, quota_wait_resets_at TEXT, quota_observed_at TEXT, quota_assessment TEXT,
+ quota_reservation TEXT, quota_before TEXT, quota_after TEXT, quota_measurement TEXT);
 CREATE INDEX IF NOT EXISTS runs_dispatch ON runs(state, job_id);
+CREATE INDEX IF NOT EXISTS runs_quota_history ON runs(provider, command, model, completed_at);
+CREATE TABLE IF NOT EXISTS run_quota_windows (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, window_id TEXT NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
+ before_percent REAL, after_percent REAL, before_resets_at TEXT, after_resets_at TEXT, consumed_percent REAL, quality TEXT NOT NULL, PRIMARY KEY(run_id, window_id));
 CREATE TABLE IF NOT EXISTS workers (instance_id TEXT PRIMARY KEY, name TEXT NOT NULL, last_seen_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS worker_quota (worker_instance TEXT NOT NULL REFERENCES workers(instance_id) ON DELETE CASCADE, provider TEXT NOT NULL, account_key TEXT NOT NULL DEFAULT '',
+ observed_at TEXT NOT NULL, status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', observation TEXT NOT NULL, PRIMARY KEY(worker_instance, provider));
 CREATE TABLE IF NOT EXISTS worker_repositories (worker_instance TEXT NOT NULL REFERENCES workers(instance_id) ON DELETE CASCADE, repository TEXT NOT NULL, PRIMARY KEY(worker_instance,repository));
 CREATE TABLE IF NOT EXISTS known_repositories (repository TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS trigger_state (identity TEXT PRIMARY KEY,family TEXT NOT NULL,config_signature TEXT NOT NULL,generation_id TEXT NOT NULL,next_due_at TEXT,pending_occurrence_at TEXT,last_attempt_at TEXT,last_success_at TEXT,last_job_state TEXT NOT NULL DEFAULT '',last_job_error TEXT NOT NULL DEFAULT '',health TEXT NOT NULL DEFAULT 'healthy',latest_error TEXT NOT NULL DEFAULT '',candidate_count INTEGER NOT NULL DEFAULT 0,admission_count INTEGER NOT NULL DEFAULT 0,coalesced_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
@@ -217,7 +245,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_trigger_occurrence ON jobs(trigger_identi
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_fixed_trigger ON jobs(trigger_identity) WHERE fixed_trigger=1 AND state IN ('queued','running');
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_trigger_subject ON jobs(trigger_subject) WHERE trigger_subject<>'' AND state IN ('queued','running');
 CREATE INDEX IF NOT EXISTS github_trigger_requests_reconciliation ON github_trigger_requests(trigger_identity,needs_reconciliation,requested_at);
-PRAGMA user_version=2;`
+PRAGMA user_version=3;`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize database: %w", err)
 	}
@@ -712,9 +740,16 @@ func (s *Store) Poll(ctx context.Context, request protocol.PollRequest) (*protoc
 	return s.poll(ctx, request, 0)
 }
 
-// poll allows at most maxConcurrentJobs running jobs. Zero leaves concurrency
-// unlimited. Expired leases remain eligible so interrupted work can make progress.
 func (s *Store) poll(ctx context.Context, request protocol.PollRequest, maxConcurrentJobs int) (*protocol.RunSpec, error) {
+	return s.pollWithPolicy(ctx, request, maxConcurrentJobs, quota.DefaultPolicy())
+}
+
+// pollWithPolicy allows at most maxConcurrentJobs running jobs. Zero leaves
+// concurrency unlimited. Expired leases remain eligible so interrupted work can
+// make progress. Quota admission is evaluated before a lease is taken: a
+// governed run without sufficient, fresh evidence records a waiting state and
+// the next eligible run is considered instead.
+func (s *Store) pollWithPolicy(ctx context.Context, request protocol.PollRequest, maxConcurrentJobs int, policy quota.Policy) (*protocol.RunSpec, error) {
 	if maxConcurrentJobs < 0 {
 		return nil, errors.New("max concurrent jobs cannot be negative")
 	}
@@ -730,6 +765,9 @@ func (s *Store) poll(ctx context.Context, request protocol.PollRequest, maxConcu
 	}
 	if _, err := tx.ExecContext(ctx, reclaimExpiredLeasesSQL, nowTime.UnixNano()); err != nil {
 		return nil, fmt.Errorf("reclaim expired leases: %w", err)
+	}
+	if err := replaceWorkerQuota(ctx, tx, request.InstanceID, request.Quota); err != nil {
+		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM worker_repositories WHERE worker_instance=?`, request.InstanceID); err != nil {
 		return nil, fmt.Errorf("clear worker repositories: %w", err)
@@ -763,55 +801,96 @@ func (s *Store) poll(ctx context.Context, request protocol.PollRequest, maxConcu
 	}
 
 	executors := stringSet(request.Executors)
-	rows, err := tx.QueryContext(ctx, `SELECT r.id,r.job_id,r.command,r.command_hash,r.executor,r.model,r.repository,r.rendered_prompt,r.timeout_ms,j.state FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.state='queued' ORDER BY r.rowid`)
+	rows, err := tx.QueryContext(ctx, `SELECT r.id,r.job_id,r.command,r.command_hash,r.executor,r.model,r.repository,j.state,COALESCE(r.quota_next_check_at,''),COALESCE(r.quota_observed_at,''),COALESCE(r.account_key,'') FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.state='queued' ORDER BY r.rowid`)
 	if err != nil {
 		return nil, err
 	}
-	var selected protocol.RunSpec
+	var candidates []queuedRun
 	for rows.Next() {
-		var candidate protocol.RunSpec
-		var jobState string
-		if err := rows.Scan(&candidate.ID, &candidate.JobID, &candidate.Command, &candidate.CommandHash, &candidate.Executor, &candidate.Model, &candidate.Repository, &candidate.RenderedPrompt, &candidate.TimeoutMillis, &jobState); err != nil {
+		var candidate queuedRun
+		if err := rows.Scan(&candidate.id, &candidate.jobID, &candidate.command, &candidate.commandHash, &candidate.executor, &candidate.model, &candidate.repository, &candidate.jobState, &candidate.nextCheckAt, &candidate.observedAt, &candidate.accountKey); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		if atCapacity && jobState != "running" {
-			continue
-		}
-		if executors[candidate.Executor] && repositories[candidate.Repository] && supportsModel(request.Models, candidate.Executor, candidate.Model) {
-			selected = candidate
-			break
-		}
+		candidates = append(candidates, candidate)
 	}
-	if err := rows.Close(); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	if selected.ID == "" {
+	var selected queuedRun
+	var admitted admission
+	for _, candidate := range candidates {
+		if atCapacity && candidate.jobState != "running" {
+			continue
+		}
+		if !executors[candidate.executor] || !repositories[candidate.repository] || !supportsModel(request.Models, candidate.executor, candidate.model) {
+			continue
+		}
+		provider := request.Providers[candidate.executor]
+		if provider == "" {
+			selected, admitted = candidate, admission{decision: quota.Decision{Admit: true, Code: quota.CodeUngoverned}}
+			break
+		}
+		resolvedModel := request.ResolvedModels[candidate.executor][candidate.model]
+		outcome, admit, err := s.evaluateCandidate(ctx, tx, policy, nowTime, candidate, provider, request.Quota, []string{candidate.model, resolvedModel})
+		if err != nil {
+			return nil, err
+		}
+		if !admit {
+			continue
+		}
+		outcome.resolvedModel = resolvedModel
+		selected, admitted = candidate, outcome
+		break
+	}
+	if selected.id == "" {
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
 		return nil, nil
 	}
-	selected.LeaseToken, err = randomID("lease", 24)
+	spec, err := scanRunSpec(tx.QueryRowContext(ctx, `SELECT id,job_id,command,command_hash,executor,model,repository,rendered_prompt,timeout_ms,COALESCE(lease_token,'') FROM runs WHERE id=?`, selected.id))
+	if err != nil {
+		return nil, err
+	}
+	spec.LeaseToken, err = randomID("lease", 24)
+	if err != nil {
+		return nil, err
+	}
+	assessment, err := encodeJSON(admitted.decision.Windows)
+	if err != nil {
+		return nil, err
+	}
+	reservation, err := encodeJSON(admitted.decision.Reservation)
+	if err != nil {
+		return nil, err
+	}
+	before, err := encodeJSON(admitted.before)
 	if err != nil {
 		return nil, err
 	}
 	expiresAt := nowTime.Add(leaseDuration).UnixNano()
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET state='running',worker_instance=?,worker_name=?,lease_token=?,lease_expires_at=?,started_at=? WHERE id=? AND state='queued'`, request.InstanceID, request.Name, selected.LeaseToken, expiresAt, now, selected.ID)
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET state='running',worker_instance=?,worker_name=?,lease_token=?,lease_expires_at=?,started_at=?,
+provider=?,account_key=?,resolved_model=?,quota_state=?,quota_wait_code='',quota_wait_reason='',quota_wait_since=NULL,quota_next_check_at=NULL,quota_wait_resets_at=NULL,
+quota_observed_at=?,quota_assessment=?,quota_reservation=?,quota_before=? WHERE id=? AND state='queued'`,
+		request.InstanceID, request.Name, spec.LeaseToken, expiresAt, now,
+		admitted.provider, admitted.decision.AccountKey, admitted.resolvedModel, admitted.quotaState(),
+		nullableTimeText(admitted.decision.ObservedAt), assessment, reservation, before, spec.ID)
 	if err != nil {
 		return nil, err
 	}
+	selectedJobID := spec.JobID
 	changed, err := result.RowsAffected()
 	if err != nil || changed != 1 {
 		return nil, fmt.Errorf("lease run: concurrent state change")
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET state='running',updated_at=? WHERE id=? AND state='queued'`, now, selected.JobID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET state='running',updated_at=? WHERE id=? AND state='queued'`, now, selectedJobID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &selected, nil
+	return &spec, nil
 }
 
 func (s *Store) Complete(ctx context.Context, runID string, completion protocol.Completion) error {
@@ -820,9 +899,9 @@ func (s *Store) Complete(ctx context.Context, runID string, completion protocol.
 		return err
 	}
 	defer tx.Rollback()
-	var jobID, state, instanceID, leaseToken, startedAt, triggerIdentity, triggerGeneration string
+	var jobID, state, instanceID, leaseToken, startedAt, triggerIdentity, triggerGeneration, provider, accountKey, beforeJSON string
 	var leaseExpiresAt sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT r.job_id,r.state,COALESCE(r.worker_instance,''),COALESCE(r.lease_token,''),r.lease_expires_at,COALESCE(r.started_at,''),COALESCE(j.trigger_identity,''),COALESCE(j.trigger_generation_id,'') FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=?`, runID).Scan(&jobID, &state, &instanceID, &leaseToken, &leaseExpiresAt, &startedAt, &triggerIdentity, &triggerGeneration); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT r.job_id,r.state,COALESCE(r.worker_instance,''),COALESCE(r.lease_token,''),r.lease_expires_at,COALESCE(r.started_at,''),COALESCE(j.trigger_identity,''),COALESCE(j.trigger_generation_id,''),COALESCE(r.provider,''),COALESCE(r.account_key,''),COALESCE(r.quota_before,'') FROM runs r JOIN jobs j ON j.id=r.job_id WHERE r.id=?`, runID).Scan(&jobID, &state, &instanceID, &leaseToken, &leaseExpiresAt, &startedAt, &triggerIdentity, &triggerGeneration, &provider, &accountKey, &beforeJSON); err != nil {
 		return err
 	}
 	if subtle.ConstantTimeCompare([]byte(instanceID), []byte(completion.InstanceID)) != 1 || subtle.ConstantTimeCompare([]byte(leaseToken), []byte(completion.LeaseToken)) != 1 {
@@ -850,6 +929,22 @@ func (s *Store) Complete(ctx context.Context, runID string, completion protocol.
 		durationMillis = elapsedMillis(startedAt, now)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE runs SET state=?,exit_code=?,error=?,result=?,events=?,lease_expires_at=NULL,completed_at=?,duration_millis=?,token_usage=? WHERE id=?`, completion.State, completion.ExitCode, completion.Error, string(completion.Result), completion.Events, now, durationMillis, tokenUsage, runID); err != nil {
+		return err
+	}
+	if err := upsertWorkerQuota(ctx, tx, instanceID, completion.Quota); err != nil {
+		return err
+	}
+	var after *quota.Observation
+	if provider != "" {
+		if observation, ok := quota.Find(completion.Quota, provider); ok {
+			after = &observation
+		}
+	}
+	overlapping, err := overlappingRuns(ctx, tx, runID, provider, accountKey, startedAt, now)
+	if err != nil {
+		return err
+	}
+	if err := recordQuotaMeasurement(ctx, tx, runID, after, quota.Measure(decodeObservation(beforeJSON), after, overlapping)); err != nil {
 		return err
 	}
 	if completion.State == "succeeded" {
@@ -1058,7 +1153,7 @@ func (s *Store) RunOutput(ctx context.Context, runID string) (RunOutput, error) 
 
 func (s *Store) listJobs(ctx context.Context) ([]Job, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT j.id,j.prompt,j.repository,j.github_issue_title,j.command,j.trigger_identity,j.occurrence_key,j.trigger_subject,j.state,j.created_at,j.updated_at,
-COALESCE(r.id,''),COALESCE(r.command,''),COALESCE(r.executor,''),COALESCE(r.model,''),COALESCE(r.state,''),COALESCE(NULLIF(r.worker_name,''),w.name,''),r.exit_code,COALESCE(r.error,''),COALESCE(r.started_at,''),COALESCE(r.completed_at,''),r.duration_millis,r.token_usage
+COALESCE(r.id,''),COALESCE(r.command,''),COALESCE(r.executor,''),COALESCE(r.model,''),COALESCE(r.state,''),COALESCE(NULLIF(r.worker_name,''),w.name,''),r.exit_code,COALESCE(r.error,''),COALESCE(r.started_at,''),COALESCE(r.completed_at,''),r.duration_millis,r.token_usage,`+runQuotaColumnsSQL+`
 FROM jobs j LEFT JOIN runs r ON r.job_id=j.id LEFT JOIN workers w ON w.instance_id=r.worker_instance ORDER BY j.created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -1069,8 +1164,10 @@ FROM jobs j LEFT JOIN runs r ON r.job_id=j.id LEFT JOIN workers w ON w.instance_
 		job := Job{Runs: []Run{}}
 		var run Run
 		var created, updated, started, completed string
-		if err := rows.Scan(&job.ID, &job.Prompt, &job.Repository, &job.GitHubIssueTitle, &job.Command, &job.TriggerID, &job.OccurrenceKey, &job.TriggerSubject, &job.State, &created, &updated,
-			&run.ID, &run.Command, &run.Executor, &run.Model, &run.State, &run.WorkerName, &run.ExitCode, &run.Error, &started, &completed, &run.DurationMillis, &run.TokenUsage); err != nil {
+		var quotaRow runQuotaRow
+		targets := []any{&job.ID, &job.Prompt, &job.Repository, &job.GitHubIssueTitle, &job.Command, &job.TriggerID, &job.OccurrenceKey, &job.TriggerSubject, &job.State, &created, &updated,
+			&run.ID, &run.Command, &run.Executor, &run.Model, &run.State, &run.WorkerName, &run.ExitCode, &run.Error, &started, &completed, &run.DurationMillis, &run.TokenUsage}
+		if err := rows.Scan(append(targets, quotaRow.scanTargets()...)...); err != nil {
 			return nil, err
 		}
 		job.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
@@ -1078,6 +1175,7 @@ FROM jobs j LEFT JOIN runs r ON r.job_id=j.id LEFT JOIN workers w ON w.instance_
 		if run.ID != "" {
 			run.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
 			run.CompletedAt, _ = time.Parse(time.RFC3339Nano, completed)
+			quotaRow.apply(&run)
 			job.Runs = append(job.Runs, run)
 		}
 		jobs = append(jobs, job)
@@ -1121,7 +1219,7 @@ func (s *Store) listWorkers(ctx context.Context) ([]Worker, error) {
 	}
 	workers := []Worker{}
 	for rows.Next() {
-		worker := Worker{Repositories: []string{}}
+		worker := Worker{Repositories: []string{}, Quota: []WorkerQuota{}}
 		var lastSeen string
 		if err := rows.Scan(&worker.InstanceID, &worker.Name, &lastSeen); err != nil {
 			rows.Close()
@@ -1151,7 +1249,19 @@ func (s *Store) listWorkers(ctx context.Context) ([]Worker, error) {
 			workers[index].Repositories = append(workers[index].Repositories, repository)
 		}
 	}
-	return workers, repositories.Err()
+	if err := errors.Join(repositories.Err(), repositories.Close()); err != nil {
+		return nil, err
+	}
+	quotaByInstance, err := listWorkerQuota(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	for instanceID, observations := range quotaByInstance {
+		if index, ok := byInstance[instanceID]; ok {
+			workers[index].Quota = observations
+		}
+	}
+	return workers, nil
 }
 
 func scanRunSpec(row *sql.Row) (protocol.RunSpec, error) {
