@@ -50,6 +50,16 @@ Choose improvements in that issue. Prepare a `sync/upstream-...` branch from
 and test before opening a PR. Keep a record of the original commits. If taking
 a complete upstream range, use a merge commit to preserve its ancestry.
 
+## Agent skills
+
+The engineering skills from [mattpocock/skills](https://github.com/mattpocock/skills)
+live in `.agents/skills/` as editable project files, with symlinks in
+`.claude/skills/` for Claude Code. Codex reads `.agents/skills/` directly.
+`skills-lock.json` records the installed source and hashes. Run
+`/setup-matt-pocock-skills` once per clone before using the other skills; it
+configures the issue tracker, triage labels, and doc locations. Pull upstream
+changes with `npx skills update`, and review the diff before committing.
+
 ## Checks, releases, and costs
 
 The existing Go and frontend CI remains the baseline. Repository policy also
