@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	machinistexamples "github.com/owainlewis/machinist/examples"
 	"github.com/owainlewis/machinist/internal/config"
@@ -874,4 +875,33 @@ func newCLIRepository(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+func TestWorkerQuotaDiagnosticUsesConfiguredAdapter(t *testing.T) {
+	directory := t.TempDir()
+	report := `{"generatedAt":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","schemaVersion":5,"providers":[{"provider":"codex","plan":"plus","account":{"accountId":"x"},"state":{"status":"fresh","stale":false},"windows":[{"id":"five_hour","label":"session","kind":"session","resetsAt":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano) + `","percentRemaining":55}],"quotaSemantics":{"status":"known","effectiveAvailability":[]}}]}`
+	tool := filepath.Join(directory, "quota-axi")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n[ \"$1\" = --version ] && { echo 0.1.39; exit 0; }\ncat <<'REPORT'\n"+report+"\nREPORT\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workerPath := filepath.Join(directory, "worker.toml")
+	body := "data_directory = \"data\"\n\n[quota]\ncommand = [" + strconv.Quote(tool) + "]\n\n[executors.codex]\ncommand = [\"codex\", \"exec\", \"-\"]\n"
+	if err := os.WriteFile(workerPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := Execute(t.Context(), []string{"worker", "quota", "--config", workerPath}, strings.NewReader(""), &stdout, &stderr, "test")
+	if exitCode != 0 || !strings.Contains(stdout.String(), "codex: fresh") || !strings.Contains(stdout.String(), "session 55%") {
+		t.Fatalf("exit code = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+
+	if err := os.WriteFile(workerPath, []byte("data_directory = \"data\"\n\n[executors.codex]\ncommand = [\"codex\", \"exec\", \"-\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = Execute(t.Context(), []string{"worker", "quota", "--config", workerPath}, strings.NewReader(""), &stdout, &stderr, "test")
+	if exitCode != 2 || !strings.Contains(stderr.String(), "[quota]") {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
 }

@@ -74,6 +74,7 @@ func newRootCommand(options *commandOptions) *cobra.Command {
 	worker.AddCommand(newRunCommand(options))
 	worker.AddCommand(newWorkerStartCommand(options))
 	worker.AddCommand(newWorkerValidateCommand(options))
+	worker.AddCommand(newWorkerQuotaCommand(options))
 	root.AddCommand(worker)
 
 	root.AddCommand(&cobra.Command{
@@ -102,6 +103,22 @@ func newWorkerValidateCommand(options *commandOptions) *cobra.Command {
 			}
 			_, err = fmt.Fprintln(options.stdout, "worker configuration is valid")
 			return err
+		},
+	}
+}
+
+func newWorkerQuotaCommand(options *commandOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "quota",
+		Short: "Check provider quota evidence for the managed worker",
+		Long:  "Run the configured quota adapter as the current user and report each governed provider's quota windows, freshness, and account association. Run it as the worker service user to verify its sign-in context.",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			workerConfig, err := config.LoadWorker(options.configPath)
+			if err != nil {
+				return err
+			}
+			return managedworker.DiagnoseQuota(command.Context(), workerConfig, options.stdout)
 		},
 	}
 }
@@ -222,7 +239,7 @@ func newStartCommand(options *commandOptions) *cobra.Command {
 				return err
 			}
 			defer store.Close()
-			server, err := controlplane.NewServer(store, machinistConfig.Path(), token, serverConfig.ConcurrentJobLimit())
+			server, err := controlplane.NewServer(store, controlplane.Options{DefinitionPath: machinistConfig.Path(), WorkerToken: token, MaxConcurrentJobs: serverConfig.ConcurrentJobLimit(), QuotaPolicy: serverConfig.QuotaPolicy()})
 			if err != nil {
 				return err
 			}

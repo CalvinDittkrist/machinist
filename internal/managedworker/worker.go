@@ -15,6 +15,7 @@ import (
 
 	"github.com/owainlewis/machinist/internal/config"
 	"github.com/owainlewis/machinist/internal/protocol"
+	"github.com/owainlewis/machinist/internal/quota"
 	"github.com/owainlewis/machinist/internal/runner"
 )
 
@@ -26,6 +27,10 @@ type Worker struct {
 	stderr         io.Writer
 	heartbeatTicks <-chan time.Time
 	executeRun     func(context.Context, protocol.RunSpec) protocol.Completion
+	// quota supplies sanitized provider observations; nil when the worker does
+	// not collect quota evidence.
+	quota       *quota.Source
+	quotaStatus map[string]string
 }
 
 const heartbeatInterval = 10 * time.Second
@@ -51,6 +56,7 @@ func New(workerConfig config.Worker, stdout, stderr io.Writer) (*Worker, error) 
 		client:     client,
 		stdout:     stdout,
 		stderr:     stderr,
+		quota:      newQuotaSource(workerConfig),
 	}, nil
 }
 
@@ -85,12 +91,22 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
+// executeWithHeartbeats runs the work and then takes a fresh quota observation
+// while the lease is still held, so the post-run measurement is delivered with
+// the completion.
 func (w *Worker) executeWithHeartbeats(ctx context.Context, spec protocol.RunSpec) protocol.Completion {
 	execute := w.executeRun
 	if execute == nil {
 		execute = w.execute
 	}
-	return withHeartbeats(ctx, w, spec, "", func() protocol.Completion { return execute(ctx, spec) })
+	return withHeartbeats(ctx, w, spec, "", func() protocol.Completion {
+		completion := execute(ctx, spec)
+		if w.quota != nil {
+			completion.Quota = w.quota.Refresh(ctx)
+			w.reportQuota(completion.Quota)
+		}
+		return completion
+	})
 }
 
 func (w *Worker) deliverWithHeartbeats(ctx context.Context, spec protocol.RunSpec, completion protocol.Completion) error {
@@ -128,11 +144,17 @@ func withHeartbeats[T any](ctx context.Context, w *Worker, spec protocol.RunSpec
 
 func (w *Worker) poll(ctx context.Context) (*protocol.RunSpec, error) {
 	request := protocol.PollRequest{
-		InstanceID:   w.instanceID,
-		Name:         w.config.Name,
-		Executors:    w.config.ExecutorNames(),
-		Repositories: w.config.RepositoryNames(),
-		Models:       w.config.ModelCapabilities(),
+		InstanceID:     w.instanceID,
+		Name:           w.config.Name,
+		Executors:      w.config.ExecutorNames(),
+		Repositories:   w.config.RepositoryNames(),
+		Models:         w.config.ModelCapabilities(),
+		ResolvedModels: w.config.ResolvedModels(),
+		Providers:      w.config.ExecutorProviders(),
+	}
+	if w.quota != nil {
+		request.Quota = w.quota.Current(ctx)
+		w.reportQuota(request.Quota)
 	}
 	var response protocol.PollResponse
 	if err := w.client.Post(ctx, "/api/v1/workers/poll", request, &response); err != nil {

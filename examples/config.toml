@@ -4,6 +4,17 @@ database = "~/.machinist/server/machinist.db"
 worker_token_file = "~/.machinist/server/worker.token"
 # max_concurrent_jobs = 1
 
+# Quota-aware admission keeps runs queued until the worker reports fresh,
+# sufficient provider quota. "disabled" preserves capability-only scheduling.
+# See docs/quota.md for the estimate and reserve semantics.
+[server.quota]
+enforcement = "disabled"
+minimum_reserve_percent = 20
+safety_reserve_percent = 5
+minimum_samples = 3
+max_observation_age = "3m"
+check_interval = "1m"
+
 [commands.foreman]
 executor = "codex"
 prompt_file = "prompts/foreman.md"

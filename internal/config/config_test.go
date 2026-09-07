@@ -672,3 +672,137 @@ func TestLoadConfigRejectsRemovedShepherdSchedules(t *testing.T) {
 		t.Fatalf("error = %v, want removed shepherd schedule guidance", err)
 	}
 }
+
+func TestLoadWorkerResolvesQuotaAdapterAndExecutorProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.toml")
+	writeTestFile(t, path, `data_directory = "state"
+
+[quota]
+command = ["npx", "-y", "quota-axi@0.1.39"]
+timeout = "15s"
+cache = "45s"
+credential_refresh = false
+
+[executors.claude]
+command = ["claude", "--print", "--model={{machinist.model}}"]
+models = { opus = "claude-opus-5" }
+
+[executors.codex-wrapped]
+command = ["/opt/tools/codex", "exec", "-"]
+
+[executors.copilot]
+command = ["gh", "copilot"]
+provider = "copilot"
+
+[executors.script]
+command = ["./scripts/workflow.sh"]
+`)
+	worker, err := LoadWorker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, enabled := worker.QuotaAdapter()
+	if !enabled || strings.Join(adapter.Command, " ") != "npx -y quota-axi@0.1.39" || adapter.Timeout != 15*time.Second || adapter.CacheTTL != 45*time.Second || adapter.CredentialRefresh {
+		t.Fatalf("quota adapter = %#v enabled=%v", adapter, enabled)
+	}
+	providers := worker.ExecutorProviders()
+	if providers["claude"] != "claude" || providers["codex-wrapped"] != "codex" || providers["copilot"] != "copilot" {
+		t.Fatalf("executor providers = %#v", providers)
+	}
+	if _, governed := providers["script"]; governed {
+		t.Fatalf("script executor must not be governed: %#v", providers)
+	}
+	if got := worker.QuotaProviders(); strings.Join(got, ",") != "claude,codex,copilot" {
+		t.Fatalf("quota providers = %v", got)
+	}
+	if resolved := worker.ResolvedModels(); resolved["claude"]["opus"] != "claude-opus-5" {
+		t.Fatalf("resolved models = %#v", resolved)
+	}
+}
+
+func TestLoadWorkerQuotaDefaultsAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.toml")
+	writeTestFile(t, path, "data_directory = \"state\"\n\n[quota]\n")
+	worker, err := LoadWorker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, enabled := worker.QuotaAdapter()
+	if !enabled || strings.Join(adapter.Command, " ") != "quota-axi" || adapter.Timeout != 20*time.Second || adapter.CacheTTL != time.Minute || !adapter.CredentialRefresh {
+		t.Fatalf("quota defaults = %#v enabled=%v", adapter, enabled)
+	}
+
+	writeTestFile(t, path, "data_directory = \"state\"\n")
+	worker, err = LoadWorker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, enabled := worker.QuotaAdapter(); enabled {
+		t.Fatal("quota adapter must be disabled without a [quota] table")
+	}
+
+	for name, body := range map[string]string{
+		"empty command":    "[quota]\ncommand = []\n",
+		"bad timeout":      "[quota]\ntimeout = \"soon\"\n",
+		"negative cache":   "[quota]\ncache = \"-1s\"\n",
+		"unknown provider": "[executors.x]\ncommand = [\"x\"]\nprovider = \"mystery\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			writeTestFile(t, path, "data_directory = \"state\"\n"+body)
+			if _, err := LoadWorker(path); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestLoadConfigResolvesServerQuotaPolicy(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "config.toml")
+	writeTestFile(t, path, `[server]
+worker_token_file = "token"
+
+[server.quota]
+enforcement = "enabled"
+minimum_reserve_percent = 25
+safety_reserve_percent = 7.5
+minimum_samples = 4
+max_observation_age = "5m"
+check_interval = "90s"
+
+[commands.plan]
+executor = "codex"
+`)
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := loaded.Server.QuotaPolicy()
+	if !policy.Enabled || policy.MinimumReservePercent != 25 || policy.SafetyReservePercent != 7.5 || policy.MinimumSamples != 4 || policy.MaxObservationAge != 5*time.Minute || policy.CheckInterval != 90*time.Second {
+		t.Fatalf("policy = %#v", policy)
+	}
+
+	writeTestFile(t, path, "[server]\nworker_token_file = \"token\"\n\n[commands.plan]\nexecutor = \"codex\"\n")
+	loaded, err = LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy := loaded.Server.QuotaPolicy(); policy.Enabled || policy.MinimumReservePercent != 20 || policy.CheckInterval != time.Minute {
+		t.Fatalf("default policy = %#v", policy)
+	}
+
+	for name, body := range map[string]string{
+		"enforcement":   "enforcement = \"maybe\"\n",
+		"reserve range": "minimum_reserve_percent = 120\n",
+		"samples":       "minimum_samples = 0\n",
+		"age":           "max_observation_age = \"0s\"\n",
+		"interval":      "check_interval = \"later\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			writeTestFile(t, path, "[server]\nworker_token_file = \"token\"\n\n[server.quota]\n"+body+"\n[commands.plan]\nexecutor = \"codex\"\n")
+			if _, err := LoadConfig(path); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}

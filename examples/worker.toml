@@ -6,6 +6,17 @@ data_directory = "~/.machinist/worker"
 url = "http://127.0.0.1:7331"
 token_file = "~/.machinist/server/worker.token"
 
+# Quota evidence: the worker runs quota-axi (pinned 0.1.39) as its own user and
+# reports sanitized provider headroom with each poll. Remove this table to send
+# no evidence. See docs/quota.md.
+[quota]
+command = ["quota-axi"]
+timeout = "20s"
+cache = "1m"
+credential_refresh = true
+
+# provider is inferred from the executable name (claude, codex, copilot); set
+# it explicitly for wrappers or scripts that consume a provider's subscription.
 [executors.codex]
 command = ["codex", "exec", "--json", "--model={{machinist.model}}", "--sandbox", "danger-full-access", "-"]
 models = { luna = "gpt-5.6-luna", terra = "gpt-5.6-terra", sol = "gpt-5.6-sol" }

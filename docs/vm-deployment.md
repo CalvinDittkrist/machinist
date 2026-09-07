@@ -46,8 +46,11 @@ curl -fsSL https://raw.githubusercontent.com/owainlewis/machinist/v0.2.0/scripts
   MACHINIST_VERSION=v0.2.0 bash
 ```
 
-The script installs Git, GitHub CLI, Codex, Claude Code, and the pinned
-Machinist release. It initializes `~/.machinist` without overwriting existing
+The script installs Git, GitHub CLI, Node.js, the pinned quota-axi release
+(the worker's quota adapter), Codex, Claude Code, and the pinned Machinist
+release. Set `MACHINIST_ROLE=control-plane` to install only the control plane:
+the script then skips the coding agents and quota-axi and leaves the worker
+service disabled. It initializes `~/.machinist` without overwriting existing
 configuration, then installs systemd services for the control plane and worker.
 It enables and starts the control plane immediately. It enables the worker only
 when a repository is already configured. Re-running the bootstrap reinstalls
@@ -207,6 +210,20 @@ command -v claude
 The root bootstrap exposes both launchers through `/usr/local/bin` for workers
 and services.
 
+Confirm that quota evidence is readable under this account. The check runs the
+pinned `quota-axi` with the same credential store the executors use and fails
+until every governed provider is signed in:
+
+```sh
+quota-axi --version
+machinist worker quota
+```
+
+A control-plane-only host does not need quota-axi. To install the adapter by
+hand elsewhere, run `npm install --global quota-axi@0.1.39` as the worker user.
+Enable enforcement with `[server.quota] enforcement = "enabled"` in
+`config.toml` once the diagnostic passes; see [quota-aware admission](quota.md).
+
 ## 7. Clone and register repositories
 
 Clone each repository the worker may use:
@@ -303,6 +320,7 @@ gh auth status
 ssh -T git@github.com
 command -v codex
 command -v claude
+machinist worker quota
 ```
 
 Then run the shipped read-only audit agent against a narrow area:
@@ -393,6 +411,18 @@ command -v codex claude
 ```
 
 Re-run the bootstrap if either launcher is missing.
+
+### `machinist worker quota` reports a sign-in or missing tool
+
+```sh
+ls -l /usr/local/bin/quota-axi
+quota-axi --version
+```
+
+Re-run the bootstrap if the launcher is missing. A `sign-in required` line
+means the provider CLI has not been authenticated as the `machinist` user:
+run `codex` or `claude` again as that user. With enforcement enabled, governed
+runs stay queued with the same reason until the diagnostic passes.
 
 ### The browser cannot reach Machinist
 

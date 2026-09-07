@@ -10,7 +10,12 @@ Machinist owns process execution, not orchestration.
   process tree on timeout or cancellation.
 - `internal/controlplane` stores one job and one run, leases it to a capable worker,
   rejects stale completions, and exposes authenticated APIs and the web UI.
-- `internal/managedworker` resolves only worker-owned executor and repository names.
+- `internal/managedworker` resolves only worker-owned executor and repository names and
+  reports sanitized provider quota observations taken with its own credentials.
+- `internal/quota` parses the pinned quota-axi output, decides admission from binding
+  quota windows, reservations, and conservative history-based estimates, and measures
+  before/after consumption with an explicit quality. The control plane owns the policy;
+  the worker owns the adapter.
 
 Each job has exactly one run. The database enforces this with a unique `runs.job_id`.
 Terminal state comes only from the process result. There is no internal stage model.

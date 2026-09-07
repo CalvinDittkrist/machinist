@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/manrope";
 import "@fontsource-variable/newsreader";
-import { Activity, ArrowLeft, BarChart3, Bot, GitBranch, LayoutDashboard, Moon, Play, Plus, Server, Sun, Table2, TimerReset, Trash2, X } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bot, Gauge, GitBranch, Hourglass, LayoutDashboard, Moon, Play, Plus, Server, Sun, Table2, TimerReset, Trash2, X } from "lucide-react";
 import { Analytics } from "@/analytics";
 import { CommandsPage, WorkersPage } from "@/catalog";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageHeading } from "@/components/ui/page-heading";
 import { cn } from "@/lib/utils";
+import { quotaAssessmentRows, quotaWaitSummary, quotaWindowRows, runQuotaKind } from "@/quota-state";
 import { formatDurationMillis, formatTaskTokenUsage, formatTokenUsage, runModelSummary, taskDurationMillis, tokenUsageSummary } from "@/run-metrics";
 import { routeFromHash } from "@/routes";
 import { boardColumns, currentRun, filterJobs, githubIssueReference, groupJobsByBoardColumn, jobCounts, jobDisplayTitle, needsAttention } from "@/runs-board";
@@ -221,7 +222,7 @@ function TaskDetail({ job, loaded, error, deleting, onDelete }) {
     <header className="space-y-4">
       <Button asChild variant="ghost" size="sm" className="-ml-3"><a href="#/runs"><ArrowLeft className="size-4" />Back to runs</a></Button>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h1 className="truncate text-xl font-semibold" title={jobDisplayTitle(job)}>{jobDisplayTitle(job)}</h1><State value={job.state} /></div><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{githubIssueReference(job) || shortId(job.id)}{githubIssueReference(job) ? ` · ${shortId(job.id)}` : ""}</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{job.id}</p></div>
+        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h1 className="truncate text-xl font-semibold" title={jobDisplayTitle(job)}>{jobDisplayTitle(job)}</h1><State value={job.state} /><QuotaBadge run={currentRun(job)} /></div><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{githubIssueReference(job) || shortId(job.id)}{githubIssueReference(job) ? ` · ${shortId(job.id)}` : ""}</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{job.id}</p></div>
         <Button variant="outline" className="self-start border-danger/35 text-danger hover:bg-danger/10" disabled={!terminal || deleting} onClick={() => onDelete(job)} title={terminal ? "Delete this task and its stored run data" : "Active tasks cannot be deleted"}><Trash2 className="size-4" />{deleting ? "Deleting…" : "Delete task"}</Button>
       </div>
       {error && <div role="alert" className="rounded-md border border-danger/35 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>}
@@ -237,6 +238,8 @@ function TaskDetail({ job, loaded, error, deleting, onDelete }) {
       <DetailMetric label="Token usage" value={formatTaskTokenUsage(usage)} />
       <DetailMetric label="Updated" value={formatTimestamp(job.updated_at)} />
     </dl>
+
+    <QuotaSection run={currentRun(job)} />
 
     <section aria-labelledby="task-prompt">
       <h2 id="task-prompt" className="text-sm font-semibold">Prompt</h2>
@@ -300,6 +303,7 @@ function RunCard({ job }) {
     <a href={`#/runs/${encodeURIComponent(job.id)}`} className="block min-w-0 p-3 transition hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50" aria-label={`Open task ${title}, ${reference || shortId(job.id)}`}>
       <div className="flex min-w-0 items-start justify-between gap-2"><p className="line-clamp-2 text-sm font-medium leading-5" title={title}>{title}</p><State value={job.state} /></div>
       <p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={job.id}>{reference ? `${reference} · ` : ""}{shortId(job.id)}</p>
+      <QuotaWaitLine run={run} />
       <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><span className="truncate font-mono">{job.repository}</span><span>·</span><Bot className="size-3.5 shrink-0" /><span className="truncate">{job.command}</span></div>
       <div className="mt-1.5 flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground"><span className="flex min-w-0 items-center gap-1.5"><Server className="size-3.5 shrink-0" /><span className="truncate">{run?.worker_name || "Unassigned"}</span></span><time className="shrink-0" dateTime={job.created_at}>{relativeTime(job.created_at)}</time></div>
     </a>
@@ -314,7 +318,7 @@ function RunRow({ job }) {
   const reference = githubIssueReference(job);
   return <article className="border-b border-border last:border-b-0">
     <a href={`#/runs/${encodeURIComponent(job.id)}`} className="grid w-full gap-3 px-4 py-3.5 text-left transition hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 xl:grid-cols-[6.5rem_minmax(9rem,1.1fr)_minmax(8rem,0.9fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_7rem_9rem] xl:items-center xl:gap-4" aria-label={`Open task ${title}, ${reference || shortId(job.id)}`}>
-      <div className="flex items-center justify-between xl:block"><State value={job.state} /><span className="text-xs text-muted-foreground xl:hidden">{relativeTime(job.created_at)}</span></div>
+      <div className="flex items-center justify-between gap-2 xl:block"><div className="flex flex-wrap items-center gap-1.5"><State value={job.state} /><QuotaBadge run={current} compact /></div><span className="text-xs text-muted-foreground xl:hidden">{relativeTime(job.created_at)}</span></div>
       <div className="min-w-0"><p className="truncate text-sm font-medium" title={title}>{title}</p><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{reference ? `${reference} · ` : ""}{shortId(job.id)}</p><p className="mt-1 break-all text-xs text-muted-foreground xl:truncate">{job.repository}</p></div>
       <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><Bot className="size-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate text-foreground">{job.command}</span></div>
       <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><Server className="size-3.5 shrink-0" /><span className="truncate">{current?.worker_name || "Unassigned"}</span></div>
@@ -323,6 +327,58 @@ function RunRow({ job }) {
       <div className="text-xs text-muted-foreground"><p className="font-medium tabular-nums text-foreground">{usage.total === undefined ? "Usage unavailable" : `${formatTokenUsage(usage.total)} tokens`}</p><p className="mt-0.5">{usage.unavailable ? `${usage.unavailable} unavailable · ` : ""}{job.runs.length} run{job.runs.length === 1 ? "" : "s"}</p></div>
     </a>
   </article>;
+}
+
+function QuotaBadge({ run, compact = false }) {
+  if (runQuotaKind(run) !== "waiting") return null;
+  return <Badge className="gap-1.5 border-primary/25 bg-primary/10 normal-case text-primary" title={quotaWaitSummary(run).reason}><Hourglass className="size-3" />{compact ? "Quota" : "Waiting for quota"}</Badge>;
+}
+
+function QuotaWaitLine({ run }) {
+  if (runQuotaKind(run) !== "waiting") return null;
+  const summary = quotaWaitSummary(run);
+  return <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-primary" title={summary.reason}><Hourglass className="size-3.5 shrink-0" /><span className="truncate">{summary.title} · next check {summary.nextCheck || "soon"}</span></p>;
+}
+
+function QuotaSection({ run }) {
+  const kind = runQuotaKind(run);
+  if (kind === "none") return null;
+  const note = "Quota differences are observations, not proof of task-attributable consumption. Reported tokens and subscription quota are separate measurements, and unrelated activity on the same account may be unobservable.";
+  if (kind === "waiting") {
+    const summary = quotaWaitSummary(run);
+    const rows = quotaAssessmentRows(run.quota_wait.windows);
+    return <section aria-labelledby="task-quota">
+      <div className="flex items-center justify-between gap-4"><h2 id="task-quota" className="text-sm font-semibold">Quota admission</h2><QuotaBadge run={run} /></div>
+      <Card className="mt-3 overflow-hidden border-primary/25">
+        <div className="border-b border-border px-4 py-3"><p className="text-sm font-medium text-primary">{summary.title}</p><p className="mt-1 break-words text-sm text-muted-foreground">{summary.reason}</p></div>
+        <dl className="grid gap-x-6 gap-y-3 px-4 py-3 sm:grid-cols-2 lg:grid-cols-4"><RunMetric label="Waiting for" value={summary.waitingFor || "Unavailable"} /><RunMetric label="Next check" value={summary.nextCheck || "Unavailable"} /><RunMetric label="Window resets" value={summary.resetsAt ? formatTimestamp(summary.resetsAt) : "Not applicable"} /><RunMetric label="Evidence observed" value={summary.observedAt ? formatTimestamp(summary.observedAt) : "None"} /></dl>
+        {rows.length > 0 && <QuotaTable caption="Binding windows" head={["Window", "Remaining", "Reserved", "Available", "Required", "Basis", "Status"]} rows={rows.map((row) => [row.label, row.remaining, row.reserved, row.available, row.required, row.basis, row.sufficient ? "Sufficient" : "Insufficient"])} tone={(row) => row[6] === "Insufficient" ? "text-danger" : "text-success"} />}
+      </Card>
+    </section>;
+  }
+  if (kind === "measured") {
+    const usage = run.quota_usage;
+    const rows = quotaWindowRows(usage);
+    return <section aria-labelledby="task-quota">
+      <div className="flex items-center justify-between gap-4"><h2 id="task-quota" className="text-sm font-semibold">Quota usage</h2><span className="text-xs text-muted-foreground">{run.provider || "provider"} · observed {formatTimestamp(usage.before_at)} → {formatTimestamp(usage.after_at)}</span></div>
+      <Card className="mt-3 overflow-hidden">
+        <QuotaTable caption="Windows" head={["Window", "Before", "After", "Consumed", "Measurement"]} rows={rows.map((row) => [row.label, row.before, row.after, row.consumed, row.quality])} tone={(row) => row[4] === "Measured" ? "text-success" : "text-warning"} />
+        <p className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">{usage.overlapping ? "Another run on the same provider account was active during this run, so the differences are not attributed to it. " : ""}{note}</p>
+      </Card>
+    </section>;
+  }
+  const rows = quotaAssessmentRows(run.quota_assessment);
+  return <section aria-labelledby="task-quota">
+    <div className="flex items-center justify-between gap-4"><h2 id="task-quota" className="text-sm font-semibold">Quota admission</h2><span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Gauge className="size-3.5" />{kind === "reserved" ? "Headroom reserved while running" : "Admitted with headroom"}</span></div>
+    <Card className="mt-3 overflow-hidden">
+      {rows.length ? <QuotaTable caption="Binding windows at admission" head={["Window", "Remaining", "Reserved by others", "Required", "Basis"]} rows={rows.map((row) => [row.label, row.remaining, row.reserved, row.required, row.basis])} /> : <p className="px-4 py-3 text-sm text-muted-foreground">No quota windows were evaluated.</p>}
+      <p className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">{note}</p>
+    </Card>
+  </section>;
+}
+
+function QuotaTable({ caption, head, rows, tone }) {
+  return <div className="overflow-x-auto"><table className="w-full text-left text-xs"><caption className="sr-only">{caption}</caption><thead className="bg-muted/35 text-muted-foreground"><tr>{head.map((label) => <th key={label} scope="col" className="px-4 py-2 font-semibold uppercase tracking-wider">{label}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={row[0] + index} className="border-t border-border">{row.map((cell, cellIndex) => <td key={cellIndex} className={cn("px-4 py-2 tabular-nums", cellIndex === 0 && "font-medium", cellIndex === row.length - 1 && tone && tone(row))}>{cell}</td>)}</tr>)}</tbody></table></div>;
 }
 
 function State({ value }) {
