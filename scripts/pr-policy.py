@@ -7,14 +7,8 @@ import subprocess
 
 
 def validate(pr, repo, issue_lookup):
-    base = pr["base"]["ref"]
-    head = pr["head"]["ref"]
-    if base == "main":
-        if head != "staging" or pr["head"]["repo"]["full_name"] != repo:
-            raise ValueError("PRs to main must promote this repository's staging branch.")
-        return
-    if base != "staging":
-        raise ValueError("Open working PRs against staging.")
+    if pr["base"]["ref"] != "main":
+        raise ValueError("Open pull requests against main.")
     author = pr.get("user", {})
     if author.get("login") == "dependabot[bot]" and author.get("type") == "Bot":
         return
