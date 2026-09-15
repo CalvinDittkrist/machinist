@@ -1,6 +1,6 @@
 ## Problem
 
-<!-- What problem does this pull request solve? For feat/fix PRs, include Refs #123 for an existing issue in this repository. -->
+<!-- What problem does this pull request solve? For feat/fix PRs, include Fixes #123 for an existing issue in this repository, or Refs #123 if the issue stays open. -->
 
 ## Type
 
