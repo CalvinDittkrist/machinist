@@ -43,7 +43,7 @@ class AutomationTests(unittest.TestCase):
         overview.run("owner/repo", api)
         self.assertEqual(len(calls), 4)
 
-    def pr(self, title="feat: new behavior", body="Refs #12", base="staging", head="feat/example"):
+    def pr(self, title="feat: new behavior", body="Refs #12", base="main", head="feat/example"):
         return {"title": title, "body": body, "base": {"ref": base},
                 "head": {"ref": head, "repo": {"full_name": "owner/repo"}}}
 
@@ -57,19 +57,21 @@ class AutomationTests(unittest.TestCase):
         for title in ("docs: clarify setup", "build(deps): bump dependency"):
             policy.validate(self.pr(title=title, body=""), "owner/repo", lambda n: self.fail("Unexpected issue lookup"))
 
-    def test_promotion_routing(self):
-        policy.validate(self.pr(base="main", head="staging"), "owner/repo", lambda n: {})
-        with self.assertRaises(ValueError):
-            policy.validate(self.pr(base="main"), "owner/repo", lambda n: {})
+    def test_only_main_accepts_pull_requests(self):
+        for body in ("Refs #12", "Fixes #12"):
+            policy.validate(self.pr(body=body), "owner/repo", lambda n: {"number": int(n)})
+        for base in ("staging", "release/1.0"):
+            with self.assertRaises(ValueError):
+                policy.validate(self.pr(base=base), "owner/repo", lambda n: {})
 
     def test_dependabot_titles_are_exempt_but_routing_is_not(self):
         pr = self.pr(title="Bump example from 1.0.0 to 1.0.1", body="")
         pr["user"] = {"login": "dependabot[bot]", "type": "Bot"}
         policy.validate(pr, "owner/repo", lambda n: self.fail("Unexpected issue lookup"))
-        pr["base"]["ref"] = "main"
+        pr["base"]["ref"] = "staging"
         with self.assertRaises(ValueError):
             policy.validate(pr, "owner/repo", lambda n: {})
-        pr["base"]["ref"] = "staging"
+        pr["base"]["ref"] = "main"
         pr["user"] = {"login": "contributor", "type": "User"}
         with self.assertRaises(ValueError):
             policy.validate(pr, "owner/repo", lambda n: {})
