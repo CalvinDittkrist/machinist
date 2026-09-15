@@ -116,7 +116,9 @@ because they consume quota. Windows without at least `minimum_samples`
 reliable samples use `minimum_reserve_percent` instead.
 
 Availability is the window's remaining percentage minus reservations held by
-other running runs on the same provider account. Reservations are conservative:
+other running runs on the same provider account. If either account identity is
+unknown, reservations for that provider are treated as potentially shared; only
+two known, different accounts are independent. Reservations are conservative:
 they are not reduced as a run consumes quota. After a run completes, observations
 older than that completion cannot allocate more headroom on the same account,
 even if the worker cache has not expired or the completion has no quota evidence.

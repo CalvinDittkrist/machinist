@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -75,7 +76,7 @@ type rawScope struct {
 // observations. Account identity is reduced to a pseudonymous key, error text
 // is bounded and flattened, and unsupported schema versions are rejected.
 func ParseReport(body []byte) ([]Observation, error) {
-	if len(strings.TrimSpace(string(body))) == 0 {
+	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, errors.New("quota report is empty")
 	}
 	var report rawReport

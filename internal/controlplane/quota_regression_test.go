@@ -21,6 +21,47 @@ type quotaAPI struct {
 	clock *testClock
 }
 
+func TestQuotaAPIReservesUnknownAccountsConservatively(t *testing.T) {
+	for _, test := range []struct {
+		name, firstAccount, secondAccount string
+		admit                             bool
+	}{
+		{"unknown candidate", "acct-a", "", false},
+		{"unknown reservation", "", "acct-a", false},
+		{"both unknown", "", "", false},
+		{"same account", "acct-a", "acct-a", false},
+		{"different accounts", "acct-a", "acct-b", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := newQuotaAPI(t, true)
+			a.submit()
+			first := claudeObservation(a.clock.Now(), 35, 80)
+			first.AccountKey = test.firstAccount
+			if run := a.poll("worker-a", []quota.Observation{first}); run == nil {
+				t.Fatal("first worker must reserve headroom")
+			}
+			a.submit()
+			second := claudeObservation(a.clock.Now(), 35, 80)
+			second.AccountKey = test.secondAccount
+			run := a.poll("worker-b", []quota.Observation{second})
+			if (run != nil) != test.admit {
+				t.Fatalf("second worker admitted = %t, want %t", run != nil, test.admit)
+			}
+			if !test.admit {
+				var waiting *QuotaWait
+				for _, job := range getStatus(t, a.url).Jobs {
+					if job.State == "queued" {
+						waiting = job.Runs[0].QuotaWait
+					}
+				}
+				if waiting == nil || waiting.Code != quota.CodeInsufficient || waiting.NextCheckAt == nil || len(waiting.Windows) == 0 || waiting.Windows[0].Reserved != 20 {
+					t.Fatalf("dashboard must explain the shared reservation: %#v", waiting)
+				}
+			}
+		})
+	}
+}
+
 func newQuotaAPI(t *testing.T, enabled bool) quotaAPI {
 	t.Helper()
 	dir := t.TempDir()

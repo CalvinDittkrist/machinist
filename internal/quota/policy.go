@@ -234,7 +234,12 @@ func (p Policy) required(requirement Requirement, windowID string) (float64, str
 func reservedByWindow(candidate Candidate, accountKey string, reservations []Reservation) map[string]float64 {
 	reserved := make(map[string]float64)
 	for _, reservation := range reservations {
-		if reservation.RunID == candidate.RunID || reservation.Provider != candidate.Provider || reservation.AccountKey != accountKey {
+		if reservation.RunID == candidate.RunID || reservation.Provider != candidate.Provider {
+			continue
+		}
+		// Unknown identities may share an account with any reservation of this
+		// provider. Only two known, different identities prove independence.
+		if reservation.AccountKey != "" && accountKey != "" && reservation.AccountKey != accountKey {
 			continue
 		}
 		for windowID, percent := range reservation.Windows {
