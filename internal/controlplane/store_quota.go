@@ -63,6 +63,7 @@ var runQuotaColumns = [][2]string{
 	{"quota_reservation", "TEXT"},
 	{"quota_before", "TEXT"},
 	{"quota_after", "TEXT"},
+	{"quota_after_at", "TEXT"},
 	{"quota_measurement", "TEXT"},
 }
 
@@ -144,8 +145,11 @@ func (s *Store) evaluateCandidate(ctx context.Context, tx querier, policy quota.
 		}
 	}
 	if policy.Enabled && hasObservation && observation.Usable() {
+		// A completed run's consumption is reflected by any observation taken
+		// at or after its post-run measurement. Without such a measurement the
+		// completion time is the earliest evidence that can include it.
 		var completedSince int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE provider=? AND (account_key=? OR account_key='' OR ?='') AND completed_at IS NOT NULL AND julianday(completed_at)>julianday(?)`,
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE provider=? AND (account_key=? OR account_key='' OR ?='') AND completed_at IS NOT NULL AND julianday(COALESCE(quota_after_at,completed_at))>julianday(?)`,
 			provider, observation.AccountKey, observation.AccountKey, observation.ObservedAt.UTC().Format(time.RFC3339Nano)).Scan(&completedSince); err != nil {
 			return admission{}, false, fmt.Errorf("check quota evidence against completed work: %w", err)
 		}
@@ -292,13 +296,14 @@ func overlappingRuns(ctx context.Context, tx querier, runID, provider, accountKe
 // recordQuotaMeasurement stores the post-run observation, the per-window
 // comparison, and queryable window rows.
 func recordQuotaMeasurement(ctx context.Context, tx querier, runID string, after *quota.Observation, measurement quota.Measurement) error {
-	var afterJSON, measurementJSON any
+	var afterJSON, afterAt, measurementJSON any
 	if after != nil {
 		encoded, err := encodeJSON(after)
 		if err != nil {
 			return err
 		}
 		afterJSON = encoded
+		afterAt = after.ObservedAt.UTC().Format(time.RFC3339Nano)
 	}
 	state := any(nil)
 	if len(measurement.Windows) > 0 {
@@ -309,7 +314,7 @@ func recordQuotaMeasurement(ctx context.Context, tx querier, runID string, after
 		measurementJSON = encoded
 		state = quotaStateMeasured
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE runs SET quota_after=?,quota_measurement=?,quota_state=COALESCE(?,quota_state),quota_reservation=NULL WHERE id=?`, afterJSON, measurementJSON, state, runID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE runs SET quota_after=?,quota_after_at=?,quota_measurement=?,quota_state=COALESCE(?,quota_state),quota_reservation=NULL WHERE id=?`, afterJSON, afterAt, measurementJSON, state, runID); err != nil {
 		return fmt.Errorf("record quota measurement: %w", err)
 	}
 	for _, window := range measurement.Windows {

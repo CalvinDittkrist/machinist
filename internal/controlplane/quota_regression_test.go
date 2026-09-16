@@ -174,6 +174,29 @@ func TestQuotaAPIDoesNotReuseCompletedAccountHeadroom(t *testing.T) {
 	}
 }
 
+func TestQuotaAPIAdmitsWithOwnPostRunEvidence(t *testing.T) {
+	// A worker measures quota after its run finishes and delivers that
+	// measurement with the completion, so the control plane records the
+	// completion slightly later than the measurement. The measurement already
+	// includes the run's consumption and must remain valid evidence for the
+	// worker's next poll, while evidence from before the run must not.
+	a := newQuotaAPI(t, true)
+	before := []quota.Observation{claudeObservation(a.clock.Now(), 35, 80)}
+	a.submit()
+	first := a.poll("worker-a", before)
+	a.clock.Advance(10 * time.Second)
+	after := []quota.Observation{claudeObservation(a.clock.Now(), 60, 75)}
+	a.clock.Advance(time.Second)
+	a.complete("worker-a", first, after)
+	a.submit()
+	if run := a.poll("worker-a", before); run != nil {
+		t.Fatal("evidence from before the completed run leased work")
+	}
+	if run := a.poll("worker-a", after); run == nil {
+		t.Fatal("the worker's own post-run measurement was treated as stale")
+	}
+}
+
 func TestQuotaAPIFlagsActivityInsideCachedMeasurementInterval(t *testing.T) {
 	// Observation recording also runs with enforcement disabled, where old
 	// evidence must not prevent execution but must still be labelled honestly.

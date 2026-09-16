@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS runs (
  provider TEXT NOT NULL DEFAULT '', account_key TEXT NOT NULL DEFAULT '', resolved_model TEXT NOT NULL DEFAULT '',
  quota_state TEXT NOT NULL DEFAULT '', quota_wait_code TEXT NOT NULL DEFAULT '', quota_wait_reason TEXT NOT NULL DEFAULT '',
  quota_wait_since TEXT, quota_next_check_at TEXT, quota_wait_resets_at TEXT, quota_observed_at TEXT, quota_assessment TEXT,
- quota_reservation TEXT, quota_before TEXT, quota_after TEXT, quota_measurement TEXT);
+ quota_reservation TEXT, quota_before TEXT, quota_after TEXT, quota_after_at TEXT, quota_measurement TEXT);
 CREATE INDEX IF NOT EXISTS runs_dispatch ON runs(state, job_id);
 CREATE INDEX IF NOT EXISTS runs_quota_history ON runs(provider, command, model, completed_at);
 CREATE TABLE IF NOT EXISTS run_quota_windows (run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, window_id TEXT NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',

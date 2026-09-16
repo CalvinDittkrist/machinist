@@ -119,11 +119,13 @@ Availability is the window's remaining percentage minus reservations held by
 other running runs on the same provider account. If either account identity is
 unknown, reservations for that provider are treated as potentially shared; only
 two known, different accounts are independent. Reservations are conservative:
-they are not reduced as a run consumes quota. After a run completes, observations
-older than that completion cannot allocate more headroom on the same account,
-even if the worker cache has not expired or the completion has no quota evidence.
-The worker must refresh its observation. Incomplete reports also wait until all
-quota windows are readable.
+they are not reduced as a run consumes quota. After a run completes, only
+observations taken at or after its post-run measurement can allocate more
+headroom on the same account, so the worker that delivered that measurement may
+keep using it while evidence from before the run waits, even if the worker cache
+has not expired. A completion without quota evidence invalidates every
+observation older than the completion itself. Incomplete reports also wait until
+all quota windows are readable.
 
 ## Measurement quality
 
