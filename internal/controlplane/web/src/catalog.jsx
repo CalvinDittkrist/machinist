@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
-import { Bot, Clock3, Hash, Server, Terminal } from "lucide-react";
+import { Bot, Clock3, Gauge, Hash, Server, Terminal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { PageHeading, QuietState } from "@/components/ui/page-heading";
+import { cn } from "@/lib/utils";
+import { workerQuotaSummary } from "@/quota-state";
 
 export function WorkersPage({ workers, loaded, error }) {
   return <Page title="Workers" description="The machines available to pick up and execute work.">{error && <Failure value={error} />}{!loaded && !error ? <Loading description="Checking live worker status." /> : loaded && (workers.length ? <Card className="overflow-hidden">{workers.map((worker) => <article key={worker.instance_id} className="grid gap-4 border-b border-border p-4 last:border-b-0 sm:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_10rem] sm:items-center sm:px-5">
     <div className="min-w-0"><div className="flex items-center gap-2"><Server className="size-4 text-muted-foreground" /><h2 className="truncate text-sm font-medium">{worker.name}</h2></div><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{worker.instance_id}</p></div>
     <div className="flex flex-wrap gap-1.5">{worker.repositories?.length ? worker.repositories.map((repository) => <Badge key={repository} className="border-border bg-muted font-mono text-muted-foreground">{repository}</Badge>) : <span className="text-xs text-muted-foreground">No repositories</span>}</div>
     <div className="flex items-center justify-between gap-2 sm:flex-col sm:items-end"><Badge className={worker.connected ? "gap-1.5 border-success/25 bg-success/10 text-success" : "gap-1.5 border-border bg-muted text-muted-foreground"}><span className="size-1.5 rounded-full bg-current" />{worker.connected ? "Connected" : "Disconnected"}</Badge><time className="text-xs text-muted-foreground sm:text-right" dateTime={worker.last_seen_at} title={new Date(worker.last_seen_at).toLocaleString()}>Last seen {relativeTime(worker.last_seen_at)}</time></div>
+    {worker.quota?.length > 0 && <WorkerQuota observations={worker.quota} />}
   </article>)}</Card> : <Empty value="No workers registered." description="Start a worker to register this machine with the control plane." />)}</Page>;
 }
 
@@ -19,6 +22,20 @@ export function CommandsPage() {
     <details><summary className="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 sm:px-5">Prompt template</summary><pre tabIndex={0} role="region" aria-label={`${command.name} prompt template`} className="max-h-[32rem] overflow-auto border-t border-border bg-background p-4 whitespace-pre-wrap font-mono text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 sm:p-5">{command.prompt}</pre></details>
     <div className="flex items-center gap-2 border-t border-border px-4 py-2.5 font-mono text-xs text-muted-foreground sm:px-5"><Hash className="size-3.5 shrink-0" /><span className="truncate" title={command.hash}>{command.hash}</span></div>
   </Card>)}</div> : <Empty value="No commands configured." />}</Page>;
+}
+
+const quotaTones = {
+  success: "border-success/25 bg-success/10 text-success",
+  warning: "border-warning/25 bg-warning/10 text-warning",
+  danger: "border-danger/25 bg-danger/10 text-danger",
+  neutral: "border-border bg-muted text-muted-foreground",
+};
+
+function WorkerQuota({ observations }) {
+  return <ul className="grid gap-2 border-t border-border pt-3 sm:col-span-3" aria-label="Provider quota">{observations.map((observation) => {
+    const summary = workerQuotaSummary(observation);
+    return <li key={observation.provider} className="flex min-w-0 flex-wrap items-center gap-2 text-xs"><Gauge className="size-3.5 shrink-0 text-muted-foreground" /><span className="font-medium capitalize">{summary.provider}</span>{summary.plan && <span className="text-muted-foreground">{summary.plan}</span>}<Badge className={cn("gap-1.5 normal-case", quotaTones[summary.tone])}><span className="size-1.5 rounded-full bg-current" />{summary.label}</Badge><span className="min-w-0 truncate text-muted-foreground" title={summary.detail}>{summary.detail}</span><span className="text-muted-foreground">· observed {summary.observed}</span></li>;
+  })}</ul>;
 }
 
 function Page({ title, description, children }) { return <div className="mx-auto max-w-[1500px] space-y-6 p-4 sm:p-6 lg:p-8"><PageHeading title={title} description={description} />{children}</div>; }

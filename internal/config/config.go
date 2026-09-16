@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/owainlewis/machinist/internal/quota"
 	"github.com/owainlewis/machinist/internal/triggers"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -36,9 +37,42 @@ type Worker struct {
 	Name          string                `toml:"name"`
 	DataDirectory string                `toml:"data_directory"`
 	ControlPlane  ControlPlane          `toml:"control_plane"`
+	Quota         *WorkerQuota          `toml:"quota"`
 	Executors     map[string]Executor   `toml:"executors"`
 	Repositories  map[string]Repository `toml:"repositories"`
 	configDir     string
+}
+
+// WorkerQuota configures the quota adapter that reads provider headroom on
+// the worker. Its presence enables quota evidence collection.
+type WorkerQuota struct {
+	Command           []string `toml:"command"`
+	Timeout           string   `toml:"timeout"`
+	Cache             string   `toml:"cache"`
+	CredentialRefresh *bool    `toml:"credential_refresh"`
+}
+
+// ResolvedQuota is the validated adapter configuration.
+type ResolvedQuota struct {
+	Command           []string
+	Timeout           time.Duration
+	CacheTTL          time.Duration
+	CredentialRefresh bool
+}
+
+// Adapter builds the quota-axi invocation for this configuration.
+func (r ResolvedQuota) Adapter() quota.Command {
+	return quota.Command{Args: append([]string(nil), r.Command...), Timeout: r.Timeout, CredentialRefresh: r.CredentialRefresh}
+}
+
+// ServerQuota configures quota-aware admission on the control plane.
+type ServerQuota struct {
+	Enforcement           string   `toml:"enforcement"`
+	MinimumReservePercent *float64 `toml:"minimum_reserve_percent"`
+	SafetyReservePercent  *float64 `toml:"safety_reserve_percent"`
+	MinimumSamples        *int     `toml:"minimum_samples"`
+	MaxObservationAge     string   `toml:"max_observation_age"`
+	CheckInterval         string   `toml:"check_interval"`
 }
 
 type ControlPlane struct {
@@ -47,8 +81,25 @@ type ControlPlane struct {
 }
 
 type Executor struct {
-	Command []string          `toml:"command"`
-	Models  map[string]string `toml:"models"`
+	Command  []string          `toml:"command"`
+	Models   map[string]string `toml:"models"`
+	Provider string            `toml:"provider"`
+}
+
+// provider returns the configured or inferred quota provider, or empty when
+// the executor is not governed by quota admission.
+func (e Executor) provider() string {
+	if provider := strings.TrimSpace(e.Provider); provider != "" {
+		return provider
+	}
+	if len(e.Command) == 0 {
+		return ""
+	}
+	name := filepath.Base(strings.TrimSpace(e.Command[0]))
+	if quota.Supported(name) {
+		return name
+	}
+	return ""
 }
 
 func (e Executor) supportsModel() bool {
@@ -60,11 +111,13 @@ type Repository struct {
 }
 
 type Server struct {
-	Listen            string `toml:"listen"`
-	Database          string `toml:"database"`
-	WorkerTokenFile   string `toml:"worker_token_file"`
-	MaxConcurrentJobs *int   `toml:"max_concurrent_jobs"`
+	Listen            string      `toml:"listen"`
+	Database          string      `toml:"database"`
+	WorkerTokenFile   string      `toml:"worker_token_file"`
+	MaxConcurrentJobs *int        `toml:"max_concurrent_jobs"`
+	Quota             ServerQuota `toml:"quota"`
 	configDir         string
+	quotaPolicy       quota.Policy
 }
 
 type Config struct {
@@ -321,6 +374,55 @@ func (w Worker) ModelCapabilities() map[string][]string {
 
 func (w Worker) RepositoryNames() []string { return sortedMapKeys(w.Repositories) }
 
+// QuotaAdapter returns the resolved adapter configuration and whether the
+// worker collects quota evidence at all.
+func (w Worker) QuotaAdapter() (ResolvedQuota, bool) {
+	if w.Quota == nil {
+		return ResolvedQuota{}, false
+	}
+	resolved, err := resolveWorkerQuota(w.Quota)
+	if err != nil {
+		return ResolvedQuota{}, false
+	}
+	return resolved, true
+}
+
+// ExecutorProviders maps each governed executor to its quota provider.
+func (w Worker) ExecutorProviders() map[string]string {
+	providers := make(map[string]string)
+	for name, executor := range w.Executors {
+		if provider := executor.provider(); provider != "" {
+			providers[name] = provider
+		}
+	}
+	return providers
+}
+
+// QuotaProviders lists the distinct providers used by governed executors.
+func (w Worker) QuotaProviders() []string {
+	set := make(map[string]struct{})
+	for _, provider := range w.ExecutorProviders() {
+		set[provider] = struct{}{}
+	}
+	return sortedMapKeys(set)
+}
+
+// ResolvedModels maps executor name to model alias to provider model name.
+func (w Worker) ResolvedModels() map[string]map[string]string {
+	resolved := make(map[string]map[string]string)
+	for name, executor := range w.Executors {
+		if len(executor.Models) == 0 {
+			continue
+		}
+		aliases := make(map[string]string, len(executor.Models))
+		for alias, model := range executor.Models {
+			aliases[alias] = strings.TrimSpace(model)
+		}
+		resolved[name] = aliases
+	}
+	return resolved
+}
+
 func (s Server) WorkerToken() (string, error) {
 	return readToken(s.WorkerTokenFile)
 }
@@ -331,6 +433,9 @@ func (s Server) ConcurrentJobLimit() int {
 	}
 	return *s.MaxConcurrentJobs
 }
+
+// QuotaPolicy returns the resolved admission policy.
+func (s Server) QuotaPolicy() quota.Policy { return s.quotaPolicy }
 
 func LoadCommand(definitionPath, name string) (ResolvedCommand, error) {
 	if strings.TrimSpace(name) == "" {
@@ -512,8 +617,95 @@ func applyWorkerDefaultsWithHostname(worker Worker, getHostname func() (string, 
 		if len(executor.Models) > 0 && !executor.supportsModel() {
 			return Worker{}, fmt.Errorf("executor %q defines models but its command does not contain %s", name, modelParameter)
 		}
+		if provider := strings.TrimSpace(executor.Provider); provider != "" && !quota.Supported(provider) {
+			return Worker{}, fmt.Errorf("executor %q provider %q is not supported; use one of %s", name, provider, strings.Join(quota.SupportedProviders, ", "))
+		}
+	}
+	if _, err := resolveWorkerQuota(worker.Quota); err != nil {
+		return Worker{}, err
 	}
 	return worker, nil
+}
+
+func resolveWorkerQuota(settings *WorkerQuota) (ResolvedQuota, error) {
+	resolved := ResolvedQuota{Command: []string{"quota-axi"}, Timeout: quota.DefaultTimeout, CacheTTL: quota.DefaultCacheTTL, CredentialRefresh: true}
+	if settings == nil {
+		return resolved, nil
+	}
+	if settings.Command != nil {
+		if len(settings.Command) == 0 || strings.TrimSpace(settings.Command[0]) == "" {
+			return ResolvedQuota{}, errors.New("quota.command must name the quota-axi executable")
+		}
+		for _, argument := range settings.Command {
+			if strings.ContainsRune(argument, '\x00') {
+				return ResolvedQuota{}, errors.New("quota.command contains a null byte")
+			}
+		}
+		resolved.Command = append([]string(nil), settings.Command...)
+	}
+	var err error
+	if resolved.Timeout, err = optionalPositiveDuration("quota.timeout", settings.Timeout, resolved.Timeout); err != nil {
+		return ResolvedQuota{}, err
+	}
+	if resolved.CacheTTL, err = optionalPositiveDuration("quota.cache", settings.Cache, resolved.CacheTTL); err != nil {
+		return ResolvedQuota{}, err
+	}
+	if settings.CredentialRefresh != nil {
+		resolved.CredentialRefresh = *settings.CredentialRefresh
+	}
+	return resolved, nil
+}
+
+func optionalPositiveDuration(field, value string, fallback time.Duration) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", field, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be positive", field)
+	}
+	return parsed, nil
+}
+
+func resolveServerQuota(settings ServerQuota) (quota.Policy, error) {
+	policy := quota.DefaultPolicy()
+	switch strings.TrimSpace(settings.Enforcement) {
+	case "", "disabled":
+		policy.Enabled = false
+	case "enabled":
+		policy.Enabled = true
+	default:
+		return quota.Policy{}, fmt.Errorf("server.quota.enforcement must be \"disabled\" or \"enabled\", not %q", settings.Enforcement)
+	}
+	if settings.MinimumReservePercent != nil {
+		if *settings.MinimumReservePercent < 0 || *settings.MinimumReservePercent > 100 {
+			return quota.Policy{}, errors.New("server.quota.minimum_reserve_percent must be between 0 and 100")
+		}
+		policy.MinimumReservePercent = *settings.MinimumReservePercent
+	}
+	if settings.SafetyReservePercent != nil {
+		if *settings.SafetyReservePercent < 0 || *settings.SafetyReservePercent > 100 {
+			return quota.Policy{}, errors.New("server.quota.safety_reserve_percent must be between 0 and 100")
+		}
+		policy.SafetyReservePercent = *settings.SafetyReservePercent
+	}
+	if settings.MinimumSamples != nil {
+		if *settings.MinimumSamples < 1 {
+			return quota.Policy{}, errors.New("server.quota.minimum_samples must be at least 1")
+		}
+		policy.MinimumSamples = *settings.MinimumSamples
+	}
+	var err error
+	if policy.MaxObservationAge, err = optionalPositiveDuration("server.quota.max_observation_age", settings.MaxObservationAge, policy.MaxObservationAge); err != nil {
+		return quota.Policy{}, err
+	}
+	if policy.CheckInterval, err = optionalPositiveDuration("server.quota.check_interval", settings.CheckInterval, policy.CheckInterval); err != nil {
+		return quota.Policy{}, err
+	}
+	return policy, nil
 }
 
 func applyServerDefaults(server Server) (Server, error) {
@@ -539,6 +731,11 @@ func applyServerDefaults(server Server) (Server, error) {
 	if server.MaxConcurrentJobs != nil && *server.MaxConcurrentJobs <= 0 {
 		return Server{}, errors.New("max_concurrent_jobs must be positive")
 	}
+	policy, err := resolveServerQuota(server.Quota)
+	if err != nil {
+		return Server{}, err
+	}
+	server.quotaPolicy = policy
 	tokenPath, err := resolveConfigPath(server.WorkerTokenFile, server.configDir)
 	if err != nil {
 		return Server{}, fmt.Errorf("resolve worker token file: %w", err)
