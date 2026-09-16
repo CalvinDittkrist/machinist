@@ -96,12 +96,11 @@ func NewServer(store *Store, options Options) (*Server, error) {
 	if maxConcurrentJobs < 0 {
 		return nil, errors.New("max concurrent jobs cannot be negative")
 	}
+	// Configuration resolves every policy field; only the zero value (no
+	// policy supplied) falls back to the disabled defaults.
 	policy := options.QuotaPolicy
-	if defaults := quota.DefaultPolicy(); policy.CheckInterval <= 0 {
-		policy.CheckInterval = defaults.CheckInterval
-	}
-	if defaults := quota.DefaultPolicy(); policy.MaxObservationAge <= 0 {
-		policy.MaxObservationAge = defaults.MaxObservationAge
+	if policy == (quota.Policy{}) {
+		policy = quota.DefaultPolicy()
 	}
 	csrfToken, err := randomID("csrf", 24)
 	if err != nil {

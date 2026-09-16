@@ -2,26 +2,29 @@ package quota
 
 import "time"
 
+// Quality classifies how trustworthy one window measurement is.
+type Quality string
+
 // Measurement qualities. Only QualityMeasured feeds estimates.
 const (
-	QualityMeasured      = "measured"
-	QualityReset         = "reset"
-	QualityOverlapping   = "overlapping"
-	QualityMissingBefore = "missing_before"
-	QualityMissingAfter  = "missing_after"
+	QualityMeasured      Quality = "measured"
+	QualityReset         Quality = "reset"
+	QualityOverlapping   Quality = "overlapping"
+	QualityMissingBefore Quality = "missing_before"
+	QualityMissingAfter  Quality = "missing_after"
 )
 
 // WindowMeasurement compares one window before and after a run.
 type WindowMeasurement struct {
-	WindowID       string    `json:"window_id"`
-	Kind           string    `json:"kind"`
-	Label          string    `json:"label,omitempty"`
-	Before         *float64  `json:"before_percent,omitempty"`
-	After          *float64  `json:"after_percent,omitempty"`
-	BeforeResetsAt time.Time `json:"before_resets_at,omitempty"`
-	AfterResetsAt  time.Time `json:"after_resets_at,omitempty"`
-	Consumed       *float64  `json:"consumed_percent,omitempty"`
-	Quality        string    `json:"quality"`
+	WindowID       string     `json:"window_id"`
+	Kind           WindowKind `json:"kind"`
+	Label          string     `json:"label,omitempty"`
+	Before         *float64   `json:"before_percent,omitempty"`
+	After          *float64   `json:"after_percent,omitempty"`
+	BeforeResetsAt time.Time  `json:"before_resets_at,omitempty"`
+	AfterResetsAt  time.Time  `json:"after_resets_at,omitempty"`
+	Consumed       *float64   `json:"consumed_percent,omitempty"`
+	Quality        Quality    `json:"quality"`
 }
 
 // Measurement is the observed quota difference around one run. A difference is
@@ -51,7 +54,7 @@ func Measure(before, after *Observation, overlapping bool) Measurement {
 	afterUsable := after != nil && after.Usable()
 	if beforeUsable {
 		for _, window := range before.Windows {
-			item := WindowMeasurement{WindowID: window.ID, Kind: string(window.Kind), Label: window.Label, Before: percentPointer(window.PercentRemaining), BeforeResetsAt: window.ResetsAt, Quality: QualityMissingAfter}
+			item := WindowMeasurement{WindowID: window.ID, Kind: window.Kind, Label: window.Label, Before: percentPointer(window.PercentRemaining), BeforeResetsAt: window.ResetsAt, Quality: QualityMissingAfter}
 			if afterUsable {
 				if afterWindow, ok := after.Window(window.ID); ok {
 					item.After = percentPointer(afterWindow.PercentRemaining)
@@ -69,13 +72,13 @@ func Measure(before, after *Observation, overlapping bool) Measurement {
 					continue
 				}
 			}
-			measurement.Windows = append(measurement.Windows, WindowMeasurement{WindowID: window.ID, Kind: string(window.Kind), Label: window.Label, After: percentPointer(window.PercentRemaining), AfterResetsAt: window.ResetsAt, Quality: QualityMissingBefore})
+			measurement.Windows = append(measurement.Windows, WindowMeasurement{WindowID: window.ID, Kind: window.Kind, Label: window.Label, After: percentPointer(window.PercentRemaining), AfterResetsAt: window.ResetsAt, Quality: QualityMissingBefore})
 		}
 	}
 	return measurement
 }
 
-func compare(before, after Window, overlapping bool) (string, *float64) {
+func compare(before, after Window, overlapping bool) (Quality, *float64) {
 	if !after.ResetsAt.Equal(before.ResetsAt) {
 		return QualityReset, nil
 	}

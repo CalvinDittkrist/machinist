@@ -84,10 +84,12 @@ if [[ $machinist_role == worker ]]; then
   # Install the pinned quota-axi release into the runtime user's ~/.local so it
   # runs under the same account and credential store as the executors. A
   # matching existing installation is reused.
+  installed_quota_axi_version() {
+    runuser -u "$runtime_user" -- env HOME="$runtime_home" "$1" --version 2>/dev/null | tail -n 1 || true
+  }
   installed_quota_axi=""
   if [[ -x "$runtime_home/.local/bin/quota-axi" ]]; then
-    installed_quota_axi=$(runuser -u "$runtime_user" -- env HOME="$runtime_home" \
-      "$runtime_home/.local/bin/quota-axi" --version 2>/dev/null | tail -n 1 || true)
+    installed_quota_axi=$(installed_quota_axi_version "$runtime_home/.local/bin/quota-axi")
   fi
   if [[ $installed_quota_axi != "$quota_axi_version" ]]; then
     runuser -u "$runtime_user" -- env HOME="$runtime_home" \
@@ -104,7 +106,7 @@ if [[ $machinist_role == worker ]]; then
     fi
     ln -sfn "$agent_path" "/usr/local/bin/$agent_command"
   done
-  installed_quota_axi=$(runuser -u "$runtime_user" -- env HOME="$runtime_home" quota-axi --version | tail -n 1)
+  installed_quota_axi=$(installed_quota_axi_version quota-axi)
   if [[ $installed_quota_axi != "$quota_axi_version" ]]; then
     echo "quota-axi reports version $installed_quota_axi, expected $quota_axi_version" >&2
     exit 1

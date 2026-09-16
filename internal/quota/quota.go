@@ -130,11 +130,14 @@ func Find(observations []Observation, provider string) (Observation, bool) {
 }
 
 // Name returns the window's display label, falling back to its ID.
-func (w Window) Name() string {
-	if w.Label != "" {
-		return w.Label
+func (w Window) Name() string { return nameOr(w.Label, w.ID) }
+
+// nameOr prefers a human-readable label over an identifier.
+func nameOr(label, id string) string {
+	if label != "" {
+		return label
 	}
-	return w.ID
+	return id
 }
 
 // Binding reports whether a window constrains a run requesting the given

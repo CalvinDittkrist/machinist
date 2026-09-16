@@ -91,7 +91,7 @@ func TestEvaluateWaitsOnMissingUnusableStaleOrErroredEvidence(t *testing.T) {
 	policy := testPolicy()
 	for name, test := range map[string]struct {
 		observations []Observation
-		code         string
+		code         DecisionCode
 		reason       string
 	}{
 		"missing":       {observations: nil, code: CodeNoObservation, reason: "no quota evidence"},

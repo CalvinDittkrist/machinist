@@ -14,7 +14,7 @@ import (
 
 // QuotaWait explains why a queued run has not been assigned yet.
 type QuotaWait struct {
-	Code        string             `json:"code"`
+	Code        quota.DecisionCode `json:"code"`
 	Reason      string             `json:"reason"`
 	Since       *time.Time         `json:"since,omitempty"`
 	NextCheckAt *time.Time         `json:"next_check_at,omitempty"`
@@ -45,6 +45,12 @@ const (
 
 const maxQuotaSamples = 400
 
+// sharedAccountSQL matches runs that may share the provider account identified
+// by the two bound account-key parameters (the same value twice). Unknown
+// identities on either side are treated as potentially shared, mirroring
+// quota.Policy's reservation rule for unknown accounts.
+const sharedAccountSQL = `(account_key=? OR account_key='' OR ?='')`
+
 // runQuotaColumns lists the columns added to runs by schema version 3. The
 // upgrade adds each one that is missing, so an interrupted upgrade completes
 // on the next start.
@@ -61,6 +67,8 @@ var runQuotaColumns = [][2]string{
 	{"quota_observed_at", "TEXT"},
 	{"quota_assessment", "TEXT"},
 	{"quota_reservation", "TEXT"},
+	// quota_before and quota_after keep the sanitized observation snapshots as
+	// supporting evidence; admission and history read the queryable columns.
 	{"quota_before", "TEXT"},
 	{"quota_after", "TEXT"},
 	{"quota_after_at", "TEXT"},
@@ -102,16 +110,14 @@ type querier interface {
 // queuedRun is one admission candidate.
 type queuedRun struct {
 	id, jobID, command, commandHash, executor, model, repository, jobState string
-	resolvedModel                                                          string
+	provider, resolvedModel                                                string
 	nextCheckAt, observedAt, accountKey                                    string
 }
 
 // admission is the recorded outcome of leasing one run.
 type admission struct {
-	provider      string
-	resolvedModel string
-	decision      quota.Decision
-	before        *quota.Observation
+	decision quota.Decision
+	before   *quota.Observation
 }
 
 func (a admission) quotaState() string {
@@ -130,7 +136,8 @@ func (a admission) quotaState() string {
 // state otherwise. Waiting runs are re-evaluated when their next check is due
 // or when a worker supplies newer evidence or evidence for a different
 // account, whichever comes first.
-func (s *Store) evaluateCandidate(ctx context.Context, tx querier, policy quota.Policy, now time.Time, candidate queuedRun, provider string, observations []quota.Observation, models []string) (admission, bool, error) {
+func (s *Store) evaluateCandidate(ctx context.Context, tx querier, policy quota.Policy, now time.Time, candidate queuedRun, observations []quota.Observation) (admission, bool, error) {
+	provider := candidate.provider
 	observation, hasObservation := quota.Find(observations, provider)
 	var before *quota.Observation
 	if hasObservation {
@@ -149,7 +156,7 @@ func (s *Store) evaluateCandidate(ctx context.Context, tx querier, policy quota.
 		// at or after its post-run measurement. Without such a measurement the
 		// completion time is the earliest evidence that can include it.
 		var completedSince int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE provider=? AND (account_key=? OR account_key='' OR ?='') AND completed_at IS NOT NULL AND julianday(COALESCE(quota_after_at,completed_at))>julianday(?)`,
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE provider=? AND `+sharedAccountSQL+` AND completed_at IS NOT NULL AND julianday(COALESCE(quota_after_at,completed_at))>julianday(?)`,
 			provider, observation.AccountKey, observation.AccountKey, observation.ObservedAt.UTC().Format(time.RFC3339Nano)).Scan(&completedSince); err != nil {
 			return admission{}, false, fmt.Errorf("check quota evidence against completed work: %w", err)
 		}
@@ -162,18 +169,18 @@ func (s *Store) evaluateCandidate(ctx context.Context, tx querier, policy quota.
 	if err != nil {
 		return admission{}, false, err
 	}
-	requirement, err := s.requirementFor(ctx, tx, policy, provider, candidate)
+	requirement, err := s.requirementFor(ctx, tx, policy, candidate)
 	if err != nil {
 		return admission{}, false, err
 	}
-	decision := policy.Evaluate(now, quota.Candidate{RunID: candidate.id, Provider: provider, Models: models, Requirement: requirement}, observations, reservations)
+	decision := policy.Evaluate(now, quota.Candidate{RunID: candidate.id, Provider: provider, Models: []string{candidate.model, candidate.resolvedModel}, Requirement: requirement}, observations, reservations)
 	if !decision.Admit {
 		if err := recordQuotaWait(ctx, tx, candidate.id, decision, now); err != nil {
 			return admission{}, false, err
 		}
 		return admission{}, false, nil
 	}
-	return admission{provider: provider, decision: decision, before: before}, true, nil
+	return admission{decision: decision, before: before}, true, nil
 }
 
 func activeReservations(ctx context.Context, tx querier, provider string) ([]quota.Reservation, error) {
@@ -201,8 +208,8 @@ func activeReservations(ctx context.Context, tx querier, provider string) ([]quo
 // requirementFor only trusts history from the same project, workflow version,
 // provider and requested/resolved model. Insufficient matching history uses
 // the policy's minimum reserve rather than widening to unrelated executions.
-func (s *Store) requirementFor(ctx context.Context, tx querier, policy quota.Policy, provider string, candidate queuedRun) (quota.Requirement, error) {
-	samples, err := quotaSamplesFrom(ctx, tx, quotaComparison{provider: provider, repository: candidate.repository, command: candidate.command, commandHash: candidate.commandHash, model: candidate.model, resolvedModel: candidate.resolvedModel})
+func (s *Store) requirementFor(ctx context.Context, tx querier, policy quota.Policy, candidate queuedRun) (quota.Requirement, error) {
+	samples, err := quotaSamplesFrom(ctx, tx, quotaComparison{provider: candidate.provider, repository: candidate.repository, command: candidate.command, commandHash: candidate.commandHash, model: candidate.model, resolvedModel: candidate.resolvedModel})
 	if err != nil {
 		return quota.Requirement{}, err
 	}
@@ -217,11 +224,8 @@ type quotaComparison struct {
 // quotaSamplesFrom lists consumption samples for comparable finished runs,
 // newest first.
 func quotaSamplesFrom(ctx context.Context, tx querier, comparison quotaComparison) ([]quota.Sample, error) {
-	query := `SELECT w.window_id,w.consumed_percent,w.quality FROM run_quota_windows w JOIN runs r ON r.id=w.run_id WHERE r.provider=? AND r.command=? AND r.model=? AND r.repository=? AND r.command_hash=? AND r.resolved_model=? AND r.completed_at IS NOT NULL AND w.consumed_percent IS NOT NULL`
-	args := []any{comparison.provider, comparison.command, comparison.model, comparison.repository, comparison.commandHash, comparison.resolvedModel}
-	query += ` ORDER BY r.completed_at DESC,w.window_id LIMIT ?`
-	args = append(args, maxQuotaSamples)
-	rows, err := tx.QueryContext(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, `SELECT w.window_id,w.consumed_percent,w.quality FROM run_quota_windows w JOIN runs r ON r.id=w.run_id WHERE r.provider=? AND r.command=? AND r.model=? AND r.repository=? AND r.command_hash=? AND r.resolved_model=? AND r.completed_at IS NOT NULL AND w.consumed_percent IS NOT NULL ORDER BY r.completed_at DESC,w.window_id LIMIT ?`,
+		comparison.provider, comparison.command, comparison.model, comparison.repository, comparison.commandHash, comparison.resolvedModel, maxQuotaSamples)
 	if err != nil {
 		return nil, fmt.Errorf("read quota history: %w", err)
 	}
@@ -285,7 +289,7 @@ func overlappingRuns(ctx context.Context, tx querier, runID, provider, accountKe
 		return false, nil
 	}
 	var count int
-	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs o WHERE o.id<>? AND o.provider=? AND (o.account_key=? OR o.account_key='' OR ?='') AND o.started_at IS NOT NULL AND julianday(o.started_at)<=julianday(?) AND (o.completed_at IS NULL OR julianday(o.completed_at)>=julianday(?))`,
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE id<>? AND provider=? AND `+sharedAccountSQL+` AND started_at IS NOT NULL AND julianday(started_at)<=julianday(?) AND (completed_at IS NULL OR julianday(completed_at)>=julianday(?))`,
 		runID, provider, accountKey, accountKey, completedAt, startedAt).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("detect overlapping runs: %w", err)
@@ -380,7 +384,7 @@ func (row *runQuotaRow) apply(run *Run) {
 	}
 	if row.state == quotaStateWaiting && run.State == "queued" {
 		run.QuotaWait = &QuotaWait{
-			Code: row.waitCode, Reason: row.waitReason,
+			Code: quota.DecisionCode(row.waitCode), Reason: row.waitReason,
 			Since: parseOptionalTime(row.waitSince), NextCheckAt: parseOptionalTime(row.nextCheckAt),
 			ResetsAt: parseOptionalTime(row.resetsAt), ObservedAt: parseOptionalTime(row.observedAt), Windows: assessment,
 		}

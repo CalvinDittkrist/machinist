@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -100,14 +101,7 @@ func ParseReport(body []byte) ([]Observation, error) {
 	return observations, nil
 }
 
-func supportedSchema(version int) bool {
-	for _, supported := range SupportedSchemaVersions {
-		if supported == version {
-			return true
-		}
-	}
-	return false
-}
+func supportedSchema(version int) bool { return slices.Contains(SupportedSchemaVersions, version) }
 
 func sanitizeProvider(provider rawProvider, observedAt time.Time, schemaVersion int) Observation {
 	observation := Observation{
@@ -142,7 +136,7 @@ func sanitizeProvider(provider rawProvider, observedAt time.Time, schemaVersion 
 	if observation.Status != StatusFresh && observation.Status != StatusStale {
 		return observation
 	}
-	observation.AccountKey = AccountKey(observation.Provider, provider.Account)
+	observation.AccountKey = accountKey(observation.Provider, provider.Account)
 	for _, window := range provider.Windows {
 		sanitized, ok := sanitizeWindow(window)
 		if !ok {
@@ -223,10 +217,10 @@ func sanitizeWindow(window rawWindow) (Window, bool) {
 	return sanitized, true
 }
 
-// AccountKey derives the pseudonymous account association for a provider. The
+// accountKey derives the pseudonymous account association for a provider. The
 // same identity yields the same key on every worker, and different providers
 // never share a key. The raw identity is not recoverable from the key.
-func AccountKey(provider string, account *rawAccount) string {
+func accountKey(provider string, account *rawAccount) string {
 	identity := ""
 	if account != nil {
 		identity = strings.TrimSpace(account.AccountID)

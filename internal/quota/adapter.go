@@ -18,18 +18,21 @@ type Adapter interface {
 	Observe(ctx context.Context, providers []string) ([]Observation, error)
 }
 
+// FailureKind classifies why an adapter invocation failed.
+type FailureKind string
+
 // Failure kinds reported by Command.
 const (
-	FailureMissingTool = "missing_tool"
-	FailureTimeout     = "timeout"
-	FailureExit        = "exit_status"
-	FailureMalformed   = "malformed_output"
-	FailureUnsupported = "unsupported_output"
+	FailureMissingTool FailureKind = "missing_tool"
+	FailureTimeout     FailureKind = "timeout"
+	FailureExit        FailureKind = "exit_status"
+	FailureMalformed   FailureKind = "malformed_output"
+	FailureUnsupported FailureKind = "unsupported_output"
 )
 
 // Failure explains why an adapter invocation produced no observations.
 type Failure struct {
-	Kind    string
+	Kind    FailureKind
 	Message string
 }
 

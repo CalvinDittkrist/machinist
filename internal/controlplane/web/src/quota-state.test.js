@@ -25,7 +25,6 @@ const waitingRun = {
 test("waiting runs are summarised with reason, next check, and reset", () => {
   assert.equal(runQuotaKind(waitingRun), "waiting");
   const summary = quotaWaitSummary(waitingRun, now);
-  assert.equal(summary.label, "Waiting for quota");
   assert.equal(summary.title, "Insufficient quota");
   assert.match(summary.reason, /session window has 12% remaining/);
   assert.equal(summary.nextCheck, "in 45s");
@@ -52,7 +51,7 @@ test("wait summaries distinguish evidence problems from insufficient headroom", 
 
 test("assessment rows describe each binding window", () => {
   const rows = quotaAssessmentRows(waitingRun.quota_wait.windows);
-  assert.deepEqual(rows[0], { id: "five_hour", label: "session", remaining: "12%", reserved: "0%", available: "12%", required: "20%", basis: "Minimum reserve", sufficient: false, resetsAt: "2026-09-07T15:00:00Z" });
+  assert.deepEqual(rows[0], { label: "session", remaining: "12%", reserved: "0%", available: "12%", required: "20%", basis: "Minimum reserve", sufficient: false, resetsAt: "2026-09-07T15:00:00Z" });
   assert.equal(rows[1].basis, "History (3 runs) + safety reserve");
   assert.equal(rows[1].sufficient, true);
 });
@@ -65,8 +64,8 @@ test("usage rows expose before, after, consumption, and measurement quality", ()
   ] } };
   assert.equal(runQuotaKind(measuredRun), "measured");
   const rows = quotaWindowRows(measuredRun.quota_usage);
-  assert.deepEqual(rows[0], { id: "five_hour", label: "session", before: "60%", after: "48.5%", consumed: "11.5%", quality: "Overlapping account activity", reliable: false });
-  assert.deepEqual(rows[1], { id: "seven_day", label: "week", before: "80%", after: "—", consumed: "—", quality: "No post-run observation", reliable: false });
+  assert.deepEqual(rows[0], { label: "session", before: "60%", after: "48.5%", consumed: "11.5%", quality: "Overlapping account activity", reliable: false });
+  assert.deepEqual(rows[1], { label: "week", before: "80%", after: "—", consumed: "—", quality: "No post-run observation", reliable: false });
   assert.equal(rows[2].quality, "Window reset during run");
   assert.equal(quotaWindowRows({ windows: [{ window_id: "x", label: "x", before_percent: 20, after_percent: 15, consumed_percent: 5, quality: "measured" }] })[0].reliable, true);
 });

@@ -14,7 +14,7 @@ const maxEstimateSamples = 20
 type Sample struct {
 	WindowID        string
 	ConsumedPercent float64
-	Quality         string
+	Quality         Quality
 }
 
 // Estimate derives a conservative per-window requirement from comparable

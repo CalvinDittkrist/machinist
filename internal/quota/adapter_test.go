@@ -56,7 +56,7 @@ func TestCommandClassifiesFailures(t *testing.T) {
 	for name, test := range map[string]struct {
 		args    []string
 		timeout time.Duration
-		kind    string
+		kind    FailureKind
 		text    string
 	}{
 		"missing tool": {args: []string{filepath.Join(t.TempDir(), "absent")}, timeout: 5 * time.Second, kind: FailureMissingTool, text: "not found"},

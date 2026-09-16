@@ -170,7 +170,7 @@ func TestPollWaitsOnMissingStaleOrErroredEvidence(t *testing.T) {
 	policy := enabledPolicy()
 	for name, test := range map[string]struct {
 		observations []quota.Observation
-		code         string
+		code         quota.DecisionCode
 	}{
 		"no evidence":   {observations: nil, code: quota.CodeNoObservation},
 		"adapter error": {observations: []quota.Observation{{Provider: "claude", ObservedAt: quotaNow, Status: quota.StatusError, Error: "quota-axi not found"}}, code: quota.CodeObservationError},

@@ -826,21 +826,19 @@ func (s *Store) pollWithPolicy(ctx context.Context, request protocol.PollRequest
 		if !executors[candidate.executor] || !repositories[candidate.repository] || !supportsModel(request.Models, candidate.executor, candidate.model) {
 			continue
 		}
-		provider := request.Providers[candidate.executor]
-		if provider == "" {
+		candidate.provider = request.Providers[candidate.executor]
+		if candidate.provider == "" {
 			selected, admitted = candidate, admission{decision: quota.Decision{Admit: true, Code: quota.CodeUngoverned}}
 			break
 		}
-		resolvedModel := request.ResolvedModels[candidate.executor][candidate.model]
-		candidate.resolvedModel = resolvedModel
-		outcome, admit, err := s.evaluateCandidate(ctx, tx, policy, nowTime, candidate, provider, request.Quota, []string{candidate.model, resolvedModel})
+		candidate.resolvedModel = request.ResolvedModels[candidate.executor][candidate.model]
+		outcome, admit, err := s.evaluateCandidate(ctx, tx, policy, nowTime, candidate, request.Quota)
 		if err != nil {
 			return nil, err
 		}
 		if !admit {
 			continue
 		}
-		outcome.resolvedModel = resolvedModel
 		selected, admitted = candidate, outcome
 		break
 	}
@@ -875,7 +873,7 @@ func (s *Store) pollWithPolicy(ctx context.Context, request protocol.PollRequest
 provider=?,account_key=?,resolved_model=?,quota_state=?,quota_wait_code='',quota_wait_reason='',quota_wait_since=NULL,quota_next_check_at=NULL,quota_wait_resets_at=NULL,
 quota_observed_at=?,quota_assessment=?,quota_reservation=?,quota_before=? WHERE id=? AND state='queued'`,
 		request.InstanceID, request.Name, spec.LeaseToken, expiresAt, now,
-		admitted.provider, admitted.decision.AccountKey, admitted.resolvedModel, admitted.quotaState(),
+		selected.provider, admitted.decision.AccountKey, selected.resolvedModel, admitted.quotaState(),
 		nullableTimeText(admitted.decision.ObservedAt), assessment, reservation, before, spec.ID)
 	if err != nil {
 		return nil, err

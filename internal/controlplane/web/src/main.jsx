@@ -352,7 +352,7 @@ function QuotaSection({ run }) {
       <Card className="mt-3 overflow-hidden border-primary/25">
         <div className="border-b border-border px-4 py-3"><p className="text-sm font-medium text-primary">{summary.title}</p><p className="mt-1 break-words text-sm text-muted-foreground">{summary.reason}</p></div>
         <dl className="grid gap-x-6 gap-y-3 px-4 py-3 sm:grid-cols-2 lg:grid-cols-4"><RunMetric label="Waiting for" value={summary.waitingFor || "Unavailable"} /><RunMetric label="Next check" value={summary.nextCheck || "Unavailable"} /><RunMetric label="Window resets" value={summary.resetsAt ? formatTimestamp(summary.resetsAt) : "Not applicable"} /><RunMetric label="Evidence observed" value={summary.observedAt ? formatTimestamp(summary.observedAt) : "None"} /></dl>
-        {rows.length > 0 && <QuotaTable caption="Binding windows" head={["Window", "Remaining", "Reserved", "Available", "Required", "Basis", "Status"]} rows={rows.map((row) => [row.label, row.remaining, row.reserved, row.available, row.required, row.basis, row.sufficient ? "Sufficient" : "Insufficient"])} tone={(row) => row[6] === "Insufficient" ? "text-danger" : "text-success"} />}
+        {rows.length > 0 && <QuotaTable caption="Binding windows" head={["Window", "Remaining", "Reserved", "Available", "Required", "Basis", "Status"]} rows={rows.map((row) => ({ cells: [row.label, row.remaining, row.reserved, row.available, row.required, row.basis, row.sufficient ? "Sufficient" : "Insufficient"], tone: row.sufficient ? "text-success" : "text-danger" }))} />}
       </Card>
     </section>;
   }
@@ -362,7 +362,7 @@ function QuotaSection({ run }) {
     return <section aria-labelledby="task-quota">
       <div className="flex items-center justify-between gap-4"><h2 id="task-quota" className="text-sm font-semibold">Quota usage</h2><span className="text-xs text-muted-foreground">{run.provider || "provider"} · observed {formatTimestamp(usage.before_at)} → {formatTimestamp(usage.after_at)}</span></div>
       <Card className="mt-3 overflow-hidden">
-        <QuotaTable caption="Windows" head={["Window", "Before", "After", "Consumed", "Measurement"]} rows={rows.map((row) => [row.label, row.before, row.after, row.consumed, row.quality])} tone={(row) => row[4] === "Measured" ? "text-success" : "text-warning"} />
+        <QuotaTable caption="Windows" head={["Window", "Before", "After", "Consumed", "Measurement"]} rows={rows.map((row) => ({ cells: [row.label, row.before, row.after, row.consumed, row.quality], tone: row.reliable ? "text-success" : "text-warning" }))} />
         <p className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">{usage.overlapping ? "Another run on the same provider account was active during this run, so the differences are not attributed to it. " : ""}{note}</p>
       </Card>
     </section>;
@@ -371,14 +371,14 @@ function QuotaSection({ run }) {
   return <section aria-labelledby="task-quota">
     <div className="flex items-center justify-between gap-4"><h2 id="task-quota" className="text-sm font-semibold">Quota admission</h2><span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Gauge className="size-3.5" />{kind === "reserved" ? "Headroom reserved while running" : "Admitted with headroom"}</span></div>
     <Card className="mt-3 overflow-hidden">
-      {rows.length ? <QuotaTable caption="Binding windows at admission" head={["Window", "Remaining", "Reserved by others", "Required", "Basis"]} rows={rows.map((row) => [row.label, row.remaining, row.reserved, row.required, row.basis])} /> : <p className="px-4 py-3 text-sm text-muted-foreground">No quota windows were evaluated.</p>}
+      {rows.length ? <QuotaTable caption="Binding windows at admission" head={["Window", "Remaining", "Reserved by others", "Required", "Basis"]} rows={rows.map((row) => ({ cells: [row.label, row.remaining, row.reserved, row.required, row.basis] }))} /> : <p className="px-4 py-3 text-sm text-muted-foreground">No quota windows were evaluated.</p>}
       <p className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">{note}</p>
     </Card>
   </section>;
 }
 
-function QuotaTable({ caption, head, rows, tone }) {
-  return <div className="overflow-x-auto"><table className="w-full text-left text-xs"><caption className="sr-only">{caption}</caption><thead className="bg-muted/35 text-muted-foreground"><tr>{head.map((label) => <th key={label} scope="col" className="px-4 py-2 font-semibold uppercase tracking-wider">{label}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={row[0] + index} className="border-t border-border">{row.map((cell, cellIndex) => <td key={cellIndex} className={cn("px-4 py-2 tabular-nums", cellIndex === 0 && "font-medium", cellIndex === row.length - 1 && tone && tone(row))}>{cell}</td>)}</tr>)}</tbody></table></div>;
+function QuotaTable({ caption, head, rows }) {
+  return <div className="overflow-x-auto"><table className="w-full text-left text-xs"><caption className="sr-only">{caption}</caption><thead className="bg-muted/35 text-muted-foreground"><tr>{head.map((label) => <th key={label} scope="col" className="px-4 py-2 font-semibold uppercase tracking-wider">{label}</th>)}</tr></thead><tbody>{rows.map(({ cells, tone }, index) => <tr key={cells[0] + index} className="border-t border-border">{cells.map((cell, cellIndex) => <td key={cellIndex} className={cn("px-4 py-2 tabular-nums", cellIndex === 0 && "font-medium", cellIndex === cells.length - 1 && tone)}>{cell}</td>)}</tr>)}</tbody></table></div>;
 }
 
 function State({ value }) {

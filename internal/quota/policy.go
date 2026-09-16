@@ -31,25 +31,31 @@ func DefaultPolicy() Policy {
 	}
 }
 
+// DecisionCode identifies why a candidate was admitted or is waiting.
+type DecisionCode string
+
 // Decision codes. Admitting codes are CodeDisabled, CodeUngoverned, and
 // CodeSufficient; every other code keeps the run queued.
 const (
-	CodeDisabled         = "disabled"
-	CodeUngoverned       = "ungoverned"
-	CodeSufficient       = "sufficient"
-	CodeNoObservation    = "no_observation"
-	CodeAuthRequired     = "auth_required"
-	CodeUnavailable      = "provider_unavailable"
-	CodeObservationError = "observation_error"
-	CodeStale            = "stale_observation"
-	CodeAwaitingReset    = "awaiting_reset_observation"
-	CodeInsufficient     = "insufficient_quota"
+	CodeDisabled         DecisionCode = "disabled"
+	CodeUngoverned       DecisionCode = "ungoverned"
+	CodeSufficient       DecisionCode = "sufficient"
+	CodeNoObservation    DecisionCode = "no_observation"
+	CodeAuthRequired     DecisionCode = "auth_required"
+	CodeUnavailable      DecisionCode = "provider_unavailable"
+	CodeObservationError DecisionCode = "observation_error"
+	CodeStale            DecisionCode = "stale_observation"
+	CodeAwaitingReset    DecisionCode = "awaiting_reset_observation"
+	CodeInsufficient     DecisionCode = "insufficient_quota"
 )
+
+// Basis records what a window requirement was derived from.
+type Basis string
 
 // Requirement bases.
 const (
-	BasisHistory        = "history"
-	BasisMinimumReserve = "minimum_reserve"
+	BasisHistory        Basis = "history"
+	BasisMinimumReserve Basis = "minimum_reserve"
 )
 
 // WindowRequirement is the estimated consumption of one window, including the
@@ -57,7 +63,7 @@ const (
 type WindowRequirement struct {
 	WindowID string  `json:"window_id"`
 	Percent  float64 `json:"percent"`
-	Basis    string  `json:"basis"`
+	Basis    Basis   `json:"basis"`
 	Samples  int     `json:"samples,omitempty"`
 }
 
@@ -95,23 +101,23 @@ type Candidate struct {
 
 // Assessment describes one binding window in a decision.
 type Assessment struct {
-	WindowID   string    `json:"window_id"`
-	Kind       string    `json:"kind"`
-	Label      string    `json:"label,omitempty"`
-	Remaining  float64   `json:"remaining_percent"`
-	Reserved   float64   `json:"reserved_percent"`
-	Available  float64   `json:"available_percent"`
-	Required   float64   `json:"required_percent"`
-	Basis      string    `json:"basis"`
-	Samples    int       `json:"samples,omitempty"`
-	Sufficient bool      `json:"sufficient"`
-	ResetsAt   time.Time `json:"resets_at"`
+	WindowID   string     `json:"window_id"`
+	Kind       WindowKind `json:"kind"`
+	Label      string     `json:"label,omitempty"`
+	Remaining  float64    `json:"remaining_percent"`
+	Reserved   float64    `json:"reserved_percent"`
+	Available  float64    `json:"available_percent"`
+	Required   float64    `json:"required_percent"`
+	Basis      Basis      `json:"basis"`
+	Samples    int        `json:"samples,omitempty"`
+	Sufficient bool       `json:"sufficient"`
+	ResetsAt   time.Time  `json:"resets_at"`
 }
 
 // Decision is the outcome of evaluating one candidate.
 type Decision struct {
 	Admit       bool
-	Code        string
+	Code        DecisionCode
 	Reason      string
 	NextCheckAt time.Time
 	ResetsAt    time.Time
@@ -140,7 +146,7 @@ func (p Policy) Evaluate(now time.Time, candidate Candidate, observations []Obse
 		}
 		return decision
 	}
-	wait := func(code, reason string) Decision {
+	wait := func(code DecisionCode, reason string) Decision {
 		decision := Decision{Code: code, Reason: reason, NextCheckAt: now.Add(p.CheckInterval)}
 		if found {
 			decision.ObservedAt = observation.ObservedAt
@@ -214,7 +220,7 @@ func (p Policy) assess(now time.Time, candidate Candidate, observation Observati
 		required, basis, samples := p.required(candidate.Requirement, window.ID)
 		available := window.PercentRemaining - reserved[window.ID]
 		assessment := Assessment{
-			WindowID: window.ID, Kind: string(window.Kind), Label: window.Label,
+			WindowID: window.ID, Kind: window.Kind, Label: window.Label,
 			Remaining: window.PercentRemaining, Reserved: reserved[window.ID], Available: roundPercent(available),
 			Required: required, Basis: basis, Samples: samples, Sufficient: available >= required, ResetsAt: window.ResetsAt,
 		}
@@ -224,7 +230,7 @@ func (p Policy) assess(now time.Time, candidate Candidate, observation Observati
 	return assessments, reservation
 }
 
-func (p Policy) required(requirement Requirement, windowID string) (float64, string, int) {
+func (p Policy) required(requirement Requirement, windowID string) (float64, Basis, int) {
 	if window, ok := requirement.window(windowID); ok && window.Basis == BasisHistory && window.Samples >= p.MinimumSamples {
 		return roundPercent(window.Percent + p.SafetyReservePercent), BasisHistory, window.Samples
 	}
@@ -259,14 +265,7 @@ func describeShortfall(provider string, assessment Assessment) string {
 		basis = fmt.Sprintf("estimated from %d comparable runs plus the safety reserve", assessment.Samples)
 	}
 	return fmt.Sprintf("The %s %s window has %s remaining%s; this run needs %s (%s); the window resets at %s.",
-		provider, assessmentName(assessment), FormatPercent(assessment.Remaining), reserved, FormatPercent(assessment.Required), basis, assessment.ResetsAt.Format(time.RFC3339))
-}
-
-func assessmentName(assessment Assessment) string {
-	if assessment.Label != "" {
-		return assessment.Label
-	}
-	return assessment.WindowID
+		provider, nameOr(assessment.Label, assessment.WindowID), FormatPercent(assessment.Remaining), reserved, FormatPercent(assessment.Required), basis, assessment.ResetsAt.Format(time.RFC3339))
 }
 
 func formatDuration(duration time.Duration) string {

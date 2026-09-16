@@ -38,7 +38,6 @@ export function runQuotaKind(run) {
 export function quotaWaitSummary(run, now = new Date()) {
   const wait = run?.quota_wait || {};
   return {
-    label: "Waiting for quota",
     title: waitTitles[wait.code] || "Waiting for quota",
     code: wait.code || "",
     reason: wait.reason || "",
@@ -51,7 +50,6 @@ export function quotaWaitSummary(run, now = new Date()) {
 
 export function quotaAssessmentRows(windows = []) {
   return windows.map((window) => ({
-    id: window.window_id,
     label: window.label || window.window_id,
     remaining: formatPercent(window.remaining_percent),
     reserved: formatPercent(window.reserved_percent),
@@ -65,7 +63,6 @@ export function quotaAssessmentRows(windows = []) {
 
 export function quotaWindowRows(usage) {
   return (usage?.windows || []).map((window) => ({
-    id: window.window_id,
     label: window.label || window.window_id,
     before: formatPercent(window.before_percent),
     after: formatPercent(window.after_percent),
