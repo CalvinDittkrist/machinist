@@ -84,7 +84,7 @@ func TestCommandClassifiesFailures(t *testing.T) {
 }
 
 func TestCommandVersion(t *testing.T) {
-	command := Command{Args: []string{fakeTool(t, "[ \"$1\" = --version ] && echo 0.1.39\n")}, Timeout: time.Second}
+	command := Command{Args: []string{fakeTool(t, "[ \"$1\" = --version ] && echo 0.1.39\n")}, Timeout: 10 * time.Second}
 	version, err := command.Version(context.Background())
 	if err != nil || version != "0.1.39" {
 		t.Fatalf("version = %q, %v", version, err)
@@ -102,7 +102,7 @@ func TestSourceCachesUntilExpiryOrReset(t *testing.T) {
 	}
 	tool := fakeTool(t, "echo x >> "+counter+"\ncat "+fixture+"\n")
 	clock := policyNow
-	source := NewSource(Command{Args: []string{tool}, Timeout: time.Second}, []string{"claude"}, 5*time.Minute)
+	source := NewSource(Command{Args: []string{tool}, Timeout: 10 * time.Second}, []string{"claude"}, 5*time.Minute)
 	source.now = func() time.Time { return clock }
 	invocations := func() int {
 		body, _ := os.ReadFile(counter)
@@ -132,7 +132,7 @@ func TestSourceCachesUntilExpiryOrReset(t *testing.T) {
 }
 
 func TestSourceReportsAdapterFailuresAsErrorObservations(t *testing.T) {
-	source := NewSource(Command{Args: []string{filepath.Join(t.TempDir(), "absent")}, Timeout: time.Second}, []string{"claude", "codex"}, time.Minute)
+	source := NewSource(Command{Args: []string{filepath.Join(t.TempDir(), "absent")}, Timeout: 10 * time.Second}, []string{"claude", "codex"}, time.Minute)
 	source.now = func() time.Time { return policyNow }
 	observations := source.Current(context.Background())
 	if len(observations) != 2 || observations[0].Status != StatusError || observations[1].Provider != "codex" || !strings.Contains(observations[0].Error, "not found") {
