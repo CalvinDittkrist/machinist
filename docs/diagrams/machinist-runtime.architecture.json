@@ -1,0 +1,390 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Machinist Runtime Architecture",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/CalvinDittkrist/machinist",
+      "revision": "552c941dc1f06e907e98073287c21a040f1c276f"
+    }
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "CLI · browser",
+      "pos": [
+        40,
+        190
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/cli/root.go",
+          "line": 60,
+          "label": "CLI commands"
+        }
+      ]
+    },
+    {
+      "id": "webui",
+      "type": "frontend",
+      "label": "Web UI",
+      "sublabel": "React SPA",
+      "pos": [
+        330,
+        60
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/controlplane/web/src/main.jsx",
+          "label": "SPA entry"
+        },
+        {
+          "path": "internal/controlplane/server.go",
+          "line": 247,
+          "label": "embedded routes"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Control Plane API",
+      "sublabel": "Go net/http · /api/v1",
+      "pos": [
+        330,
+        190
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "tag": "start",
+      "sources": [
+        {
+          "path": "internal/controlplane/server.go",
+          "line": 247,
+          "end_line": 263,
+          "label": "routes"
+        }
+      ]
+    },
+    {
+      "id": "scheduler",
+      "type": "backend",
+      "label": "Trigger Scheduler",
+      "sublabel": "managed triggers",
+      "pos": [
+        910,
+        190
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/controlplane/server.go",
+          "line": 192,
+          "label": "runScheduler"
+        },
+        {
+          "path": "internal/controlplane/trigger_scheduler.go",
+          "line": 24,
+          "label": "processManagedTrigger"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "SQLite Store",
+      "sublabel": "jobs · runs · leases",
+      "pos": [
+        620,
+        190
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/controlplane/store.go",
+          "line": 155,
+          "label": "OpenStore"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Managed Worker",
+      "sublabel": "leased run loop",
+      "pos": [
+        330,
+        340
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "tag": "worker start",
+      "sources": [
+        {
+          "path": "internal/managedworker/worker.go",
+          "line": 57,
+          "label": "Run loop"
+        },
+        {
+          "path": "internal/managedworker/client.go",
+          "line": 50,
+          "label": "HTTP client"
+        }
+      ]
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "Runner",
+      "sublabel": "process supervisor",
+      "pos": [
+        620,
+        340
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/runner/runner.go",
+          "line": 91,
+          "label": "Execute"
+        },
+        {
+          "path": "internal/runner/process_unix.go",
+          "label": "process tree kill"
+        }
+      ]
+    },
+    {
+      "id": "executor",
+      "type": "external",
+      "label": "Agent Executor",
+      "sublabel": "codex · claude · script",
+      "pos": [
+        910,
+        340
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "examples/worker.toml",
+          "label": "executor argv"
+        }
+      ]
+    },
+    {
+      "id": "artifacts",
+      "type": "database",
+      "label": "Run Artifacts",
+      "sublabel": "run data directory",
+      "pos": [
+        620,
+        470
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/runner/events.go",
+          "line": 87,
+          "label": "event log"
+        }
+      ]
+    },
+    {
+      "id": "github",
+      "type": "external",
+      "label": "GitHub",
+      "sublabel": "issues · PRs · gh CLI",
+      "pos": [
+        1200,
+        340
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "sources": [
+        {
+          "path": "internal/controlplane/github_cli.go",
+          "line": 125,
+          "label": "gh search"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Host · unprivileged machinist account · systemd",
+      "wraps": [
+        "webui",
+        "api",
+        "scheduler",
+        "store",
+        "worker",
+        "runner",
+        "executor",
+        "artifacts"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "Control plane · loopback 127.0.0.1:7331",
+      "wraps": [
+        "webui",
+        "api",
+        "scheduler",
+        "store"
+      ],
+      "pad": 14
+    },
+    {
+      "kind": "security-group",
+      "label": "Worker · approved executors and repositories",
+      "wraps": [
+        "worker",
+        "runner",
+        "executor",
+        "artifacts"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "operator",
+      "to": "api",
+      "label": "submit · Bearer token",
+      "variant": "emphasis"
+    },
+    {
+      "from": "operator",
+      "to": "webui",
+      "label": "SSH tunnel :7331",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "from": "webui",
+      "to": "api",
+      "label": "JSON · CSRF header",
+      "labelDy": 34
+    },
+    {
+      "from": "api",
+      "to": "store",
+      "label": "one job → one run",
+      "variant": "emphasis"
+    },
+    {
+      "from": "scheduler",
+      "to": "store",
+      "label": "due jobs · lease reclaim"
+    },
+    {
+      "from": "scheduler",
+      "to": "github",
+      "label": "gh issue search · labels",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "from": "api",
+      "to": "worker",
+      "label": "leases RunSpec on poll · heartbeat · complete",
+      "variant": "emphasis",
+      "labelDy": 44
+    },
+    {
+      "from": "worker",
+      "to": "runner",
+      "label": "Execute(command, repo)",
+      "variant": "emphasis"
+    },
+    {
+      "from": "runner",
+      "to": "executor",
+      "label": "spawn · prompt on stdin",
+      "variant": "emphasis"
+    },
+    {
+      "from": "runner",
+      "to": "artifacts",
+      "label": "append events · write result",
+      "labelDy": 34
+    },
+    {
+      "from": "executor",
+      "to": "github",
+      "label": "git push · gh pr create",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Primary path",
+      "items": [
+        "Operator submits a prompt, an approved command, and a logical repository name",
+        "Store records exactly one job and one run; a unique runs.job_id enforces it",
+        "Worker polls outbound with the bearer token, holds a 30s lease, heartbeats every 10s",
+        "Runner spawns the executor in the repo, pipes the prompt to stdin, streams output",
+        "Exit 0 succeeds; any other exit, timeout, or cancel fails; stale completions are rejected"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Trust boundaries",
+      "items": [
+        "Control plane refuses non-loopback listen addresses; reach it only via SSH tunnel",
+        "Worker endpoints need worker.token; browser submissions need CSRF plus loopback Origin",
+        "API sends only names; worker.toml maps them to executor argv and repository paths",
+        "Executor runs as the unprivileged machinist account with a sanitized environment",
+        "Runner kills the whole process tree on timeout or cancel"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Triggers and externals",
+      "items": [
+        "Scheduler loops every 30s per trigger: cron, interval, or github label",
+        "GitHub triggers search issues by label via gh, check actor write permission, relabel machinist:queued",
+        "Executors push branches and open pull requests; a human still merges",
+        "machinist update pulls GitHub Releases and verifies SHA-256 before replacing the binary",
+        "Codex and Claude Code CLIs use their own credentials on the worker host"
+      ]
+    }
+  ]
+}
